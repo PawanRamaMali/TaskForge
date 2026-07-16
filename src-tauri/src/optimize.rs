@@ -43,7 +43,7 @@ pub fn plan(state: &SharedState) -> Vec<PlannedAction> {
                 category: p.category,
                 kind,
                 reason: format!(
-                    "non-essential helper using {:.0}% of a core / {} MB — safe to {verb}",
+                    "non-essential helper using {:.0}% of a core / {} MB - safe to {verb}",
                     cpu_smoothed,
                     p.mem_bytes / (1024 * 1024)
                 ),
@@ -55,7 +55,7 @@ pub fn plan(state: &SharedState) -> Vec<PlannedAction> {
                 category: p.category,
                 kind: OptimizeKind::LowerPriority,
                 reason: format!(
-                    "sustained {:.0}% of a CPU core — lower priority to keep the system responsive",
+                    "sustained {:.0}% of a CPU core - lower priority to keep the system responsive",
                     cpu_smoothed
                 ),
             });
@@ -66,7 +66,7 @@ pub fn plan(state: &SharedState) -> Vec<PlannedAction> {
                 category: p.category,
                 kind: OptimizeKind::TrimRam,
                 reason: format!(
-                    "background process holding {} MB — reclaim unused memory",
+                    "background process holding {} MB - reclaim unused memory",
                     p.mem_bytes / (1024 * 1024)
                 ),
             });
@@ -101,7 +101,7 @@ fn execute_guarded(
     own_pid: u32,
     a: &PlannedAction,
 ) -> Result<(), ActionError> {
-    // Re-validate against the live snapshot — never trust the frontend payload.
+    // Re-validate against the live snapshot - never trust the frontend payload.
     let Some(current) = snapshot.and_then(|s| s.processes.iter().find(|p| p.pid == a.pid)) else {
         return Err(ActionError::NotFound);
     };

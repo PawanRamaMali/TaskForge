@@ -86,7 +86,7 @@ class AppStore {
   async processAction(pid: number, action: string, name: string): Promise<boolean> {
     try {
       await invoke('process_action', { pid, action });
-      this.toast('ok', `${action.replace(/_/g, ' ')} — ${name} (${pid})`);
+      this.toast('ok', `${action.replace(/_/g, ' ')} - ${name} (${pid})`);
       return true;
     } catch (e) {
       this.toast('error', `${name} (${pid}): ${e}`);
@@ -97,7 +97,7 @@ class AppStore {
   async setPriority(pid: number, level: PriorityLevel, name: string): Promise<boolean> {
     try {
       await invoke('set_priority', { pid, level });
-      this.toast('ok', `priority → ${level} — ${name} (${pid})`);
+      this.toast('ok', `priority → ${level} - ${name} (${pid})`);
       return true;
     } catch (e) {
       this.toast('error', `${name} (${pid}): ${e}`);
@@ -108,7 +108,7 @@ class AppStore {
   async setEfficiencyMode(pid: number, on: boolean, name: string): Promise<boolean> {
     try {
       await invoke('set_efficiency_mode', { pid, on });
-      this.toast('ok', `efficiency mode ${on ? 'on' : 'off'} — ${name} (${pid})`);
+      this.toast('ok', `efficiency mode ${on ? 'on' : 'off'} - ${name} (${pid})`);
       return true;
     } catch (e) {
       this.toast('error', `${name} (${pid}): ${e}`);
@@ -119,7 +119,7 @@ class AppStore {
   async setAffinity(pid: number, mask: number, name: string): Promise<boolean> {
     try {
       await invoke('set_affinity', { pid, mask });
-      this.toast('ok', `affinity updated — ${name} (${pid})`);
+      this.toast('ok', `affinity updated - ${name} (${pid})`);
       return true;
     } catch (e) {
       this.toast('error', `${name} (${pid}): ${e}`);
@@ -131,7 +131,7 @@ class AppStore {
     try {
       const results = await invoke<ActionResult[]>('kill_tree', { pid });
       const ok = results.filter((r) => r.ok).length;
-      this.toast('ok', `killed ${ok}/${results.length} in tree — ${name} (${pid})`);
+      this.toast('ok', `killed ${ok}/${results.length} in tree - ${name} (${pid})`);
       return results;
     } catch (e) {
       this.toast('error', `${name} (${pid}): ${e}`);
@@ -168,7 +168,7 @@ class AppStore {
     try {
       await invoke('set_rule', { exe, priority, efficiencyMode });
       await this.refreshRules();
-      this.toast('ok', `rule saved — ${exe} → ${priority}`);
+      this.toast('ok', `rule saved - ${exe} → ${priority}`);
     } catch (e) {
       this.toast('error', `rule: ${e}`);
     }
@@ -178,7 +178,7 @@ class AppStore {
     try {
       await invoke('remove_rule', { exe });
       await this.refreshRules();
-      this.toast('ok', `rule removed — ${exe}`);
+      this.toast('ok', `rule removed - ${exe}`);
     } catch (e) {
       this.toast('error', `rule: ${e}`);
     }

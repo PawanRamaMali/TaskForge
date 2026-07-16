@@ -53,7 +53,7 @@
         title="Some actions on other users' / system processes will be denied. Click to relaunch with full privileges."
         onclick={() => store.restartAsAdmin()}
       >
-        limited mode — elevate
+        limited mode - elevate
       </button>
     {/if}
     <div class="header-actions">
@@ -83,7 +83,7 @@
       />
       <StatCard
         title="GPU"
-        value={s.gpu.available ? fmtPct(s.gpu.utilization, 0) : '—'}
+        value={s.gpu.available ? fmtPct(s.gpu.utilization, 0) : '-'}
         sub="{s.gpu.name ?? ''}{s.gpu.memUsed != null ? ` · ${fmtBytes(s.gpu.memUsed)} / ${fmtBytes(s.gpu.memTotal)}` : ''}{s.gpu.temperatureC != null ? ` · ${s.gpu.temperatureC}°C` : ''}"
         history={store.gpuHistory}
         color="#53c98b"

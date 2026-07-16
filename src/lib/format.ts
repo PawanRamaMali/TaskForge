@@ -1,5 +1,5 @@
 export function fmtBytes(n: number | null | undefined): string {
-  if (n == null) return '—';
+  if (n == null) return '-';
   if (n < 1024) return `${n} B`;
   const units = ['KB', 'MB', 'GB', 'TB'];
   let v = n / 1024;
@@ -12,17 +12,17 @@ export function fmtBytes(n: number | null | undefined): string {
 }
 
 export function fmtBps(n: number | null | undefined): string {
-  if (n == null || n === 0) return '—';
+  if (n == null || n === 0) return '-';
   return `${fmtBytes(n)}/s`;
 }
 
 export function fmtPct(n: number | null | undefined, digits = 1): string {
-  if (n == null) return '—';
+  if (n == null) return '-';
   return `${n.toFixed(digits)}%`;
 }
 
 export function fmtDuration(seconds: number | null | undefined): string {
-  if (seconds == null || seconds < 0) return '—';
+  if (seconds == null || seconds < 0) return '-';
   const d = Math.floor(seconds / 86400);
   const h = Math.floor((seconds % 86400) / 3600);
   const m = Math.floor((seconds % 3600) / 60);
@@ -34,6 +34,6 @@ export function fmtDuration(seconds: number | null | undefined): string {
 }
 
 export function fmtTime(epochSeconds: number | null | undefined): string {
-  if (!epochSeconds) return '—';
+  if (!epochSeconds) return '-';
   return new Date(epochSeconds * 1000).toLocaleString();
 }

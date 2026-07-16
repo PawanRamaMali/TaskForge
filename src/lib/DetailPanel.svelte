@@ -85,16 +85,16 @@
       <div><span>CPU</span><b>{fmtPct(proc.cpu)}</b></div>
       <div><span>Memory</span><b>{fmtBytes(proc.memBytes)}</b></div>
       <div><span>Disk</span><b>{fmtBps(proc.diskReadBps + proc.diskWriteBps)}</b></div>
-      <div><span>GPU</span><b>{proc.gpuUtil != null ? fmtPct(proc.gpuUtil, 0) : '—'}</b></div>
+      <div><span>GPU</span><b>{proc.gpuUtil != null ? fmtPct(proc.gpuUtil, 0) : '-'}</b></div>
       <div><span>Uptime</span><b>{fmtDuration(proc.runTime)}</b></div>
       <div><span>Priority</span><b>{details?.priority ?? '…'}</b></div>
     </section>
 
     <section class="kv">
-      <div class="row"><span>User</span><code>{proc.user ?? '—'}</code></div>
-      <div class="row"><span>Parent PID</span><code>{proc.parentPid ?? '—'}</code></div>
+      <div class="row"><span>User</span><code>{proc.user ?? '-'}</code></div>
+      <div class="row"><span>Parent PID</span><code>{proc.parentPid ?? '-'}</code></div>
       <div class="row"><span>Started</span><code>{fmtTime(proc.startTime)}</code></div>
-      <div class="row"><span>Path</span><code class="wrap">{proc.exe ?? '—'}</code></div>
+      <div class="row"><span>Path</span><code class="wrap">{proc.exe ?? '-'}</code></div>
       {#if details?.cwd}<div class="row"><span>Working dir</span><code class="wrap">{details.cwd}</code></div>{/if}
       {#if details && details.cmd.length}
         <div class="row"><span>Command</span><code class="wrap">{details.cmd.join(' ')}</code></div>

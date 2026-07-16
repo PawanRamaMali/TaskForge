@@ -18,7 +18,7 @@ fn last_errno() -> ActionError {
 fn map_nix(e: nix::errno::Errno) -> ActionError {
     match e {
         nix::errno::Errno::EPERM | nix::errno::Errno::EACCES => {
-            ActionError::PermissionDenied("not permitted — run with sudo for other users' processes".into())
+            ActionError::PermissionDenied("not permitted - run with sudo for other users' processes".into())
         }
         nix::errno::Errno::ESRCH => ActionError::NotFound,
         other => ActionError::Os(other.desc().into()),
@@ -220,7 +220,7 @@ pub fn trim_ram(pid: u32) -> Result<(), ActionError> {
                 libc::close(pidfd);
                 return Err(match err.raw_os_error() {
                     Some(libc::EPERM) => ActionError::PermissionDenied(
-                        "RAM trim needs CAP_SYS_NICE — run with sudo or: sudo setcap cap_sys_nice+ep <binary>".into(),
+                        "RAM trim needs CAP_SYS_NICE - run with sudo or: sudo setcap cap_sys_nice+ep <binary>".into(),
                     ),
                     Some(libc::ENOSYS) => {
                         ActionError::Unsupported("kernel too old for process_madvise (needs >= 5.10)".into())

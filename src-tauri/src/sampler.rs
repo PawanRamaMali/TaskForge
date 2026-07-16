@@ -55,7 +55,7 @@ fn run(app: AppHandle, state: Arc<SharedState>) {
     let elevated = actions::is_elevated();
     let own_pid = std::process::id();
 
-    // First refresh yields meaningless CPU deltas — warm up and discard.
+    // First refresh yields meaningless CPU deltas - warm up and discard.
     sys.refresh_cpu_usage();
     sys.refresh_processes_specifics(ProcessesToUpdate::All, true, proc_refresh_kind());
     std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL.max(Duration::from_millis(250)));
@@ -239,7 +239,7 @@ fn run(app: AppHandle, state: Arc<SharedState>) {
         // Keep the tray tooltip live.
         if let Some(tray) = app.tray_by_id("main") {
             let _ = tray.set_tooltip(Some(format!(
-                "TaskForge — CPU {:.0}%  ·  RAM {:.0}%",
+                "TaskForge - CPU {:.0}%  ·  RAM {:.0}%",
                 snapshot.cpu.overall,
                 snapshot.mem.used as f64 / snapshot.mem.total.max(1) as f64 * 100.0
             )));

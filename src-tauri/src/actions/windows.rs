@@ -55,7 +55,7 @@ impl Drop for ProcHandle {
 fn map_win_err(e: windows::core::Error, _pid: u32) -> ActionError {
     if e.code() == ERROR_ACCESS_DENIED.to_hresult() {
         ActionError::PermissionDenied(
-            "access denied — try running TaskForge as administrator (protected processes stay off-limits)".into(),
+            "access denied - try running TaskForge as administrator (protected processes stay off-limits)".into(),
         )
     } else if e.code() == ERROR_INVALID_PARAMETER.to_hresult() {
         ActionError::NotFound

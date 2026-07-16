@@ -50,11 +50,11 @@
       <p class="muted">Analyzing running processes…</p>
     {:else if phase === 'preview'}
       {#if plan.length === 0}
-        <p class="muted">Nothing to optimize — no resource hogs or non-essential helpers found. 🎉</p>
+        <p class="muted">Nothing to optimize - no resource hogs or non-essential helpers found. 🎉</p>
         <div class="buttons"><button class="btn" onclick={onclose}>Close</button></div>
       {:else}
         <p class="muted">
-          {plan.length} suggested action{plan.length === 1 ? '' : 's'}. Uncheck anything you want to keep as-is —
+          {plan.length} suggested action{plan.length === 1 ? '' : 's'}. Uncheck anything you want to keep as-is -
           nothing happens until you hit Apply.
         </p>
         <div class="list">

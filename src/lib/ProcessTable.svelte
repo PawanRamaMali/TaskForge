@@ -234,19 +234,19 @@
   <tr class:suspended={p.suspended} class:selected={p.pid === selectedPid} onclick={() => rowClick(p)}>
     <td class="name" title={p.exe ?? p.name}>
       <span style="padding-left: {depth * 14}px"></span>
-      {#if p.category === 'Critical'}<span class="lock" title="Critical system process — protected">🔒</span>{/if}
+      {#if p.category === 'Critical'}<span class="lock" title="Critical system process - protected">🔒</span>{/if}
       {p.name}
       {#if p.suspended}<span class="badge suspended-badge">suspended</span>{/if}
       {#if p.safeToKill}<span class="badge safe-badge" title="Identified as non-essential">optimizable</span>{/if}
     </td>
     <td class="dim">{p.pid}</td>
-    <td class="dim user">{p.user ?? '—'}</td>
+    <td class="dim user">{p.user ?? '-'}</td>
     <td class="num" class:hot={p.cpu > 20}>{fmtPct(p.cpu)}</td>
     <td class="num">{fmtBytes(p.memBytes)}</td>
     <td class="num dim">{fmtBps(p.diskReadBps + p.diskWriteBps)}</td>
     {#if gpuOn}
-      <td class="num">{p.gpuUtil != null ? fmtPct(p.gpuUtil, 0) : '—'}</td>
-      <td class="num dim">{p.gpuMemBytes != null ? fmtBytes(p.gpuMemBytes) : '—'}</td>
+      <td class="num">{p.gpuUtil != null ? fmtPct(p.gpuUtil, 0) : '-'}</td>
+      <td class="num dim">{p.gpuMemBytes != null ? fmtBytes(p.gpuMemBytes) : '-'}</td>
     {/if}
     <td class="actions-col">
       <button class="kebab" onclick={(e) => openMenu(p.pid, e)} title="Actions">⋮</button>
