@@ -70,6 +70,23 @@ impl GpuInfo {
     }
 }
 
+#[derive(Serialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct NetInfo {
+    pub rx_bps: u64,
+    pub tx_bps: u64,
+    pub total_rx: u64,
+    pub total_tx: u64,
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TempInfo {
+    pub label: String,
+    pub temp_c: f32,
+    pub max_c: Option<f32>,
+}
+
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ProcInfo {
@@ -90,6 +107,11 @@ pub struct ProcInfo {
     pub category: Category,
     pub safe_to_kill: bool,
     pub suspended: bool,
+    /// Seconds the process has been running.
+    pub run_time: u64,
+    /// Unix epoch seconds when the process started.
+    pub start_time: u64,
+    pub status: String,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -99,9 +121,47 @@ pub struct Snapshot {
     pub cpu: CpuInfo,
     pub mem: MemInfo,
     pub disks: Vec<DiskInfo>,
+    pub net: NetInfo,
+    pub temps: Vec<TempInfo>,
     pub gpu: GpuInfo,
     pub processes: Vec<ProcInfo>,
     pub elevated: bool,
+}
+
+/// Windows priority classes / Linux nice buckets, mapped in the actions layer.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PriorityLevel {
+    Idle,
+    BelowNormal,
+    Normal,
+    AboveNormal,
+    High,
+}
+
+/// On-demand details for the process inspector panel (extra syscalls, not in the tick).
+#[derive(Serialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessDetails {
+    pub pid: u32,
+    pub cmd: Vec<String>,
+    pub cwd: Option<String>,
+    pub priority: Option<String>,
+    pub efficiency_mode: Option<bool>,
+    /// Bitmask of cores the process may run on.
+    pub affinity_mask: Option<u64>,
+    pub core_count: u32,
+    pub environ_count: usize,
+}
+
+/// A persistent "always run this executable at priority X" rule (ProBalance-lite).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PriorityRule {
+    /// Executable base name, lowercased (e.g. "chrome.exe").
+    pub exe: String,
+    pub priority: PriorityLevel,
+    #[serde(default)]
+    pub efficiency_mode: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]

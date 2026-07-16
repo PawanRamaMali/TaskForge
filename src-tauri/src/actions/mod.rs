@@ -8,6 +8,8 @@ mod imp;
 
 use serde::Serializer;
 
+use crate::model::{PriorityLevel, ProcessDetails};
+
 #[derive(Debug, Clone)]
 pub enum ActionError {
     PermissionDenied(String),
@@ -36,7 +38,27 @@ impl serde::Serialize for ActionError {
 }
 
 pub fn set_priority_low(pid: u32) -> Result<(), ActionError> {
-    imp::set_priority_low(pid)
+    imp::set_priority(pid, PriorityLevel::BelowNormal)
+}
+
+pub fn set_priority(pid: u32, level: PriorityLevel) -> Result<(), ActionError> {
+    imp::set_priority(pid, level)
+}
+
+pub fn set_efficiency_mode(pid: u32, on: bool) -> Result<(), ActionError> {
+    imp::set_efficiency_mode(pid, on)
+}
+
+pub fn set_affinity(pid: u32, mask: u64) -> Result<(), ActionError> {
+    imp::set_affinity(pid, mask)
+}
+
+pub fn get_details(pid: u32) -> Result<ProcessDetails, ActionError> {
+    imp::get_details(pid)
+}
+
+pub fn restart_as_admin() -> Result<(), ActionError> {
+    imp::restart_as_admin()
 }
 
 pub fn trim_ram(pid: u32) -> Result<(), ActionError> {

@@ -4,40 +4,59 @@ A cross-platform task manager (Windows 11 + Ubuntu) built with Tauri v2, Rust, a
 
 ## Features
 
-- **Live dashboard** — CPU (overall + per-core), RAM, per-drive disk activity, GPU utilization/VRAM/temperature (NVIDIA via NVML; gracefully hidden on machines without it), refreshed every 1.5 s with 90-second sparkline history.
-- **Process list** — sortable and searchable, with per-process CPU %, memory, disk I/O, and GPU usage.
+**Monitoring**
+
+- **Live dashboard** — CPU (overall + per-core grid), RAM, per-drive disk activity, network throughput (↓/↑), CPU/system temperatures, and GPU utilization/VRAM/temperature (NVIDIA via NVML; gracefully hidden without it). Refreshed every 1.5 s with 90-second sparkline history.
+- **Process list** — sortable and searchable, with per-process CPU %, memory, disk I/O, and GPU usage. View as **grouped** (by category), **flat**, or a **parent/child tree**.
+- **Process inspector** — click any row for a detail panel: full command line, working directory, parent, start time, uptime, status, current priority, CPU affinity, and environment-variable count.
 - **Smart grouping** — processes are classified as **Apps**, **Background**, **OS services**, or **Critical system**. Critical processes are locked: the backend refuses to kill or suspend them no matter what the UI asks.
-- **Per-process actions** — lower priority, trim RAM, suspend/resume, end task, force kill (with confirmation dialogs).
-- **Optimize All** — scans for non-essential helpers (updaters, telemetry) and resource hogs, shows a preview of planned actions, and applies only what you leave checked.
+
+**Actions** (all with backend safety guards)
+
+- **Priority** — set any level (Idle → High), or toggle Windows **Efficiency mode** (EcoQoS).
+- **CPU affinity** — pick exactly which cores a process may run on.
+- **Memory** — trim working set / page out unused RAM.
+- **Suspend / resume**, **end task**, **force kill**, and **end process tree** (kills children too, still guarding protected processes).
+- **Persistent priority rules** (ProBalance-lite) — remember "always run *chrome.exe* at Below-normal" and re-apply automatically whenever that executable starts. Stored in a config file.
+- **Optimize All** — scans for non-essential helpers (updaters, telemetry) and sustained resource hogs, shows a preview of planned actions, and applies only what you leave checked.
+
+**Quality-of-life**
+
+- System-tray icon with live CPU/RAM tooltip; click to restore the window.
+- One-click **Restart as administrator** (Windows `runas` / Linux `pkexec`).
+- Light and dark themes (persisted).
 
 ## Actions & required privileges
 
 | Action | Windows | Ubuntu |
 |---|---|---|
-| Lower priority | own processes unelevated; others need admin | own processes (one-way without root) |
+| Set priority / Efficiency mode | own processes unelevated; others need admin | own processes; raising priority needs root |
+| CPU affinity | own processes unelevated; others need admin | own processes (`sched_setaffinity`) |
 | Trim RAM | `EmptyWorkingSet`; services need admin | needs root or `sudo setcap cap_sys_nice+ep <binary>` (kernel ≥ 5.10) |
 | Suspend / resume | own processes unelevated; others need admin | own processes (SIGSTOP/SIGCONT) |
-| End / force kill | own processes unelevated; others need admin | own processes (SIGTERM/SIGKILL) |
+| End / force kill / kill tree | own processes unelevated; others need admin | own processes (SIGTERM/SIGKILL) |
 
-Run elevated (Administrator / sudo) for full control. The header shows a "limited mode" badge otherwise. Protected processes (PPL on Windows, kernel threads on Linux) stay off-limits even when elevated — by design.
+Run elevated (Administrator / sudo) for full control. The header shows a "limited mode — elevate" button otherwise. Protected processes (PPL on Windows, kernel threads on Linux) stay off-limits even when elevated — by design.
 
 ## How it compares
 
-Most open-source system monitors are either monitor-only or kill-only. TaskForge focuses on **acting** on processes safely.
+The established process power-tools (System Informer, Process Lasso) are Windows-only; the polished cross-platform monitors (NeoHtop, Mission Center) mostly just kill. TaskForge combines the action depth of the former with cross-platform reach and a guarded, preview-first optimize flow.
 
-| Capability | TaskForge | [NeoHtop](https://github.com/Abdenasser/neohtop) | [system-monitor](https://github.com/xinggaoya/system-monitor) |
-|---|:---:|:---:|:---:|
-| Live CPU / RAM / disk / GPU | ✅ | ✅ (no GPU) | ✅ |
-| Per-process GPU usage | ✅ | ❌ | ❌ (system-wide only) |
-| Kill process | ✅ | ✅ | ❌ |
-| Lower priority | ✅ | ❌ | ❌ |
-| Trim RAM (working set) | ✅ | ❌ | ❌ |
-| Suspend / resume | ✅ | ❌ | ❌ |
-| OS-critical classification + safety guards | ✅ | ❌ | ❌ |
-| "Optimize All" with preview | ✅ | ❌ | ❌ |
-| Stack | Tauri + Rust + Svelte | Tauri + Rust + Svelte | Tauri + Rust + Vue |
+| Capability | TaskForge | [System Informer](https://github.com/winsiderss/systeminformer) | [Process Lasso](https://bitsum.com/) | [NeoHtop](https://github.com/Abdenasser/neohtop) | [Mission Center](https://gitlab.com/mission-center-devs/mission-center) |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Platforms | Win + Linux | Windows | Windows | Win/Mac/Linux | Linux |
+| Per-process GPU | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Priority levels + Efficiency mode | ✅ | ✅ | ✅ | ❌ | ❌ |
+| CPU affinity | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Trim RAM (working set) | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Suspend / resume | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Persistent priority rules | ✅ | ❌ | ✅ | ❌ | ❌ |
+| OS-critical classification + **enforced** guards | ✅ | ❌ | partial | ❌ | ❌ |
+| "Optimize All" with preview | ✅ | ❌ | auto only | ❌ | ❌ |
 
-TaskForge's distinguishing idea is the **guarded action layer**: processes are classified (Critical / OS service / Background / App), the Rust backend refuses destructive actions on protected processes regardless of what the UI requests, and "Optimize All" proposes a reviewable plan rather than acting blindly.
+No single feature here is unique — each ships in some mature tool. TaskForge's distinguishing combination is: **cross-platform** (Tauri), an explicit **Critical / OS-service / Background / App taxonomy** with guards the *backend* enforces (not a dismissible prompt), and an **Optimize All that proposes a reviewable plan** rather than acting automatically. The action layer is modeled on the Process Explorer / System Informer right-click model; the persistent rules and optimize flow are modeled on Process Lasso's ProBalance and Windows Efficiency Mode.
+
+Deliberately out of scope (System Informer's deep-inspection territory): per-process **network** attribution (needs ETW), and the threads/handles/modules inspector.
 
 ## Development
 
@@ -74,9 +93,10 @@ Each OS builds its own installers — build on Windows for Windows, on Ubuntu fo
 
 ## Architecture
 
-- `src-tauri/src/sampler.rs` — background thread sampling system + process metrics via `sysinfo`, emitting a `snapshot` event every 1.5 s
+- `src-tauri/src/sampler.rs` — background thread sampling system + process/network/temperature metrics via `sysinfo`, emitting a `snapshot` event every 1.5 s; also applies persistent priority rules
 - `src-tauri/src/classify.rs` — OS-specific classification rules and the safe-to-kill table
-- `src-tauri/src/actions/` — per-OS process actions with backend-enforced safety guards
+- `src-tauri/src/actions/` — per-OS process actions (priority, efficiency, affinity, trim, suspend, kill, elevation) with backend-enforced safety guards
+- `src-tauri/src/rules.rs` — persistent per-executable priority rules (loaded from / saved to the app config dir)
 - `src-tauri/src/gpu.rs` — NVML wrapper with graceful degradation
 - `src-tauri/src/optimize.rs` — two-phase Optimize All (plan → user preview → apply)
-- `src/lib/` — Svelte 5 frontend (stat cards, sparklines, grouped process table, dialogs)
+- `src/lib/` — Svelte 5 frontend (stat cards, sparklines, process table with grouped/flat/tree views, detail panel, dialogs)

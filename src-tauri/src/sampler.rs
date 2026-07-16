@@ -3,13 +3,16 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
-use sysinfo::{Disks, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind, Users};
+use sysinfo::{
+    Components, Disks, Networks, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind, Users,
+};
 use tauri::{AppHandle, Emitter};
 
 use crate::actions;
 use crate::classify::{self, ProcFacts};
 use crate::gpu::GpuMonitor;
 use crate::model::*;
+use crate::rules::RuleStore;
 
 const TICK: Duration = Duration::from_millis(1500);
 /// EMA smoothing factor for sustained-CPU detection used by Optimize All.
@@ -20,6 +23,9 @@ pub struct SharedState {
     pub latest: Mutex<Option<Snapshot>>,
     pub suspended: Mutex<HashSet<u32>>,
     pub cpu_ema: Mutex<HashMap<u32, f32>>,
+    pub rules: RuleStore,
+    /// Pids we've already applied a persistent rule to (so we don't reassert every tick).
+    pub rules_applied: Mutex<HashSet<u32>>,
 }
 
 pub fn spawn(app: AppHandle, state: Arc<SharedState>) {
@@ -42,6 +48,8 @@ fn proc_refresh_kind() -> ProcessRefreshKind {
 fn run(app: AppHandle, state: Arc<SharedState>) {
     let mut sys = System::new();
     let mut disks = Disks::new_with_refreshed_list();
+    let mut networks = Networks::new_with_refreshed_list();
+    let mut components = Components::new_with_refreshed_list();
     let users = Users::new_with_refreshed_list();
     let mut gpu = GpuMonitor::new();
     let elevated = actions::is_elevated();
@@ -62,6 +70,8 @@ fn run(app: AppHandle, state: Arc<SharedState>) {
         sys.refresh_memory();
         sys.refresh_processes_specifics(ProcessesToUpdate::All, true, proc_refresh_kind());
         disks.refresh(true);
+        networks.refresh(true);
+        components.refresh(true);
 
         let (gpu_info, gpu_procs) = gpu.sample();
 
@@ -78,6 +88,7 @@ fn run(app: AppHandle, state: Arc<SharedState>) {
 
         let mut processes: Vec<ProcInfo> = Vec::with_capacity(sys.processes().len());
         let mut ema = state.cpu_ema.lock();
+        let mut applied = state.rules_applied.lock();
         let mut live_pids: HashSet<u32> = HashSet::with_capacity(sys.processes().len());
 
         for (pid, p) in sys.processes() {
@@ -109,10 +120,19 @@ fn run(app: AppHandle, state: Arc<SharedState>) {
             };
             let (category, safe_to_kill) = classify::classify(&facts);
 
+            // Apply a persistent priority rule the first time we see this pid.
+            if !applied.contains(&pid_u32) && category != Category::Critical {
+                if let Some(rule) = state.rules.match_exe(&name) {
+                    let _ = actions::set_priority(pid_u32, rule.priority);
+                    if rule.efficiency_mode {
+                        let _ = actions::set_efficiency_mode(pid_u32, true);
+                    }
+                    applied.insert(pid_u32);
+                }
+            }
+
             let cpu_raw = p.cpu_usage();
             let cpu_norm = cpu_raw / core_count as f32;
-            // EMA tracks raw (per-core) CPU so a process pinning one core registers
-            // as a hog regardless of how many cores the machine has.
             let e = ema.entry(pid_u32).or_insert(cpu_raw);
             *e = *e * (1.0 - EMA_ALPHA) + cpu_raw * EMA_ALPHA;
 
@@ -140,10 +160,17 @@ fn run(app: AppHandle, state: Arc<SharedState>) {
                 category,
                 safe_to_kill,
                 suspended: suspended_now.contains(&pid_u32) || os_stopped,
+                // Protected processes report start_time 0 on Windows; avoid a bogus
+                // "runs since 1970" uptime by zeroing run_time when start is unknown.
+                run_time: if p.start_time() == 0 { 0 } else { p.run_time() },
+                start_time: p.start_time(),
+                status: p.status().to_string(),
             });
         }
         ema.retain(|pid, _| live_pids.contains(pid));
+        applied.retain(|pid| live_pids.contains(pid));
         drop(ema);
+        drop(applied);
 
         let disks_info: Vec<DiskInfo> = disks
             .iter()
@@ -158,6 +185,25 @@ fn run(app: AppHandle, state: Arc<SharedState>) {
                     read_bps: (du.read_bytes as f64 / interval_secs) as u64,
                     write_bps: (du.written_bytes as f64 / interval_secs) as u64,
                 }
+            })
+            .collect();
+
+        let mut net = NetInfo::default();
+        for (_name, data) in networks.iter() {
+            net.rx_bps += (data.received() as f64 / interval_secs) as u64;
+            net.tx_bps += (data.transmitted() as f64 / interval_secs) as u64;
+            net.total_rx += data.total_received();
+            net.total_tx += data.total_transmitted();
+        }
+
+        let temps: Vec<TempInfo> = components
+            .iter()
+            .filter_map(|c| {
+                c.temperature().map(|t| TempInfo {
+                    label: c.label().to_string(),
+                    temp_c: t,
+                    max_c: c.max(),
+                })
             })
             .collect();
 
@@ -183,10 +229,21 @@ fn run(app: AppHandle, state: Arc<SharedState>) {
                 swap_used: sys.used_swap(),
             },
             disks: disks_info,
+            net,
+            temps,
             gpu: gpu_info,
             processes,
             elevated,
         };
+
+        // Keep the tray tooltip live.
+        if let Some(tray) = app.tray_by_id("main") {
+            let _ = tray.set_tooltip(Some(format!(
+                "TaskForge — CPU {:.0}%  ·  RAM {:.0}%",
+                snapshot.cpu.overall,
+                snapshot.mem.used as f64 / snapshot.mem.total.max(1) as f64 * 100.0
+            )));
+        }
 
         let _ = app.emit("snapshot", &snapshot);
         *state.latest.lock() = Some(snapshot);
