@@ -26,6 +26,10 @@ pub struct SharedState {
     pub rules: RuleStore,
     /// Pids we've already applied a persistent rule to (so we don't reassert every tick).
     pub rules_applied: Mutex<HashSet<u32>>,
+    /// Cached (name, category, safe_to_kill) per pid. Classification is stable for
+    /// the life of a process, so we classify once instead of every tick; the name
+    /// is stored so an exec that renames the process triggers a reclassification.
+    pub class_cache: Mutex<HashMap<u32, (String, Category, bool)>>,
 }
 
 pub fn spawn(app: AppHandle, state: Arc<SharedState>) {
@@ -89,6 +93,7 @@ fn run(app: AppHandle, state: Arc<SharedState>) {
         let mut processes: Vec<ProcInfo> = Vec::with_capacity(sys.processes().len());
         let mut ema = state.cpu_ema.lock();
         let mut applied = state.rules_applied.lock();
+        let mut class_cache = state.class_cache.lock();
         let mut live_pids: HashSet<u32> = HashSet::with_capacity(sys.processes().len());
 
         for (pid, p) in sys.processes() {
@@ -118,7 +123,14 @@ fn run(app: AppHandle, state: Arc<SharedState>) {
                 session_id: p.session_id().map(|s| s.as_u32()),
                 current_session_id,
             };
-            let (category, safe_to_kill) = classify::classify(&facts);
+            let (category, safe_to_kill) = match class_cache.get(&pid_u32) {
+                Some((cached_name, cat, safe)) if *cached_name == name => (*cat, *safe),
+                _ => {
+                    let r = classify::classify(&facts);
+                    class_cache.insert(pid_u32, (name.clone(), r.0, r.1));
+                    r
+                }
+            };
 
             // Apply a persistent priority rule the first time we see this pid.
             if !applied.contains(&pid_u32) && category != Category::Critical {
@@ -169,8 +181,10 @@ fn run(app: AppHandle, state: Arc<SharedState>) {
         }
         ema.retain(|pid, _| live_pids.contains(pid));
         applied.retain(|pid| live_pids.contains(pid));
+        class_cache.retain(|pid, _| live_pids.contains(pid));
         drop(ema);
         drop(applied);
+        drop(class_cache);
 
         let disks_info: Vec<DiskInfo> = disks
             .iter()

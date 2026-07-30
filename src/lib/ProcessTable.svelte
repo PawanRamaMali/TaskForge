@@ -143,6 +143,46 @@
   const gpuOn = $derived(store.snapshot?.gpu.available ?? false);
   const colCount = $derived(gpuOn ? 9 : 7);
 
+  // Virtualized rendering. The three view modes are flattened into one linear
+  // list of display rows, then only the on-screen slice is rendered - the raw
+  // process list can be 2000+ rows and putting them all in the DOM on every
+  // 1.5s tick is what made the monitor a heavy CPU user.
+  type DisplayRow =
+    | { kind: 'group'; cat: Category; label: string; count: number; aggCpu: number; aggMem: number; isCollapsed: boolean }
+    | { kind: 'proc'; proc: ProcInfo; depth: number };
+
+  const displayRows = $derived.by<DisplayRow[]>(() => {
+    const out: DisplayRow[] = [];
+    if (groups) {
+      for (const g of groups) {
+        out.push({ kind: 'group', cat: g.cat, label: g.label, count: g.items.length, aggCpu: g.aggCpu, aggMem: g.aggMem, isCollapsed: collapsed.has(g.cat) });
+        if (!collapsed.has(g.cat)) for (const p of g.items) out.push({ kind: 'proc', proc: p, depth: 0 });
+      }
+    } else if (treeRows) {
+      for (const r of treeRows) out.push({ kind: 'proc', proc: r.proc, depth: r.depth });
+    } else {
+      for (const p of rows) out.push({ kind: 'proc', proc: p, depth: 0 });
+    }
+    return out;
+  });
+
+  const ROW_H = 28; // px; must stay in sync with the fixed row height in CSS
+  const OVERSCAN = 8; // rows rendered beyond the viewport on each side
+  let scroller = $state<HTMLDivElement>();
+  let scrollTop = $state(0);
+  let viewportH = $state(640);
+
+  const startIndex = $derived(Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN));
+  const endIndex = $derived(Math.min(displayRows.length, Math.ceil((scrollTop + viewportH) / ROW_H) + OVERSCAN));
+  const visibleRows = $derived(displayRows.slice(startIndex, endIndex));
+  const padTop = $derived(startIndex * ROW_H);
+  const padBottom = $derived(Math.max(0, (displayRows.length - endIndex) * ROW_H));
+
+  function onScroll() {
+    if (scroller) scrollTop = scroller.scrollTop;
+    if (menuPid !== null) closeMenu();
+  }
+
   function protectedReason(p: ProcInfo): string | null {
     if (p.category === 'Critical') return 'blocked for critical system processes';
     if (p.category === 'SystemService') return 'blocked for OS services';
@@ -190,7 +230,7 @@
   <span class="count">{rows.length} processes</span>
 </div>
 
-<div class="table-wrap">
+<div class="table-wrap" bind:this={scroller} bind:clientHeight={viewportH} onscroll={onScroll}>
   <table>
     <thead>
       <tr>
@@ -208,24 +248,21 @@
       </tr>
     </thead>
     <tbody>
-      {#if groups}
-        {#each groups as g (g.cat)}
-          <tr class="group-row" onclick={() => toggleGroup(g.cat)}>
+      {#if padTop > 0}<tr class="vspacer" aria-hidden="true"><td colspan={colCount} style="height:{padTop}px"></td></tr>{/if}
+      {#each visibleRows as dr (dr.kind === 'group' ? 'g-' + dr.cat : dr.proc.pid)}
+        {#if dr.kind === 'group'}
+          <tr class="group-row" onclick={() => toggleGroup(dr.cat)}>
             <td colspan={colCount}>
-              <span class="chev">{collapsed.has(g.cat) ? '▸' : '▾'}</span>
-              <span class="group-label {g.cat}">{g.label}</span>
-              <span class="group-agg">{g.items.length} · CPU {fmtPct(g.aggCpu)} · {fmtBytes(g.aggMem)}</span>
+              <span class="chev">{dr.isCollapsed ? '▸' : '▾'}</span>
+              <span class="group-label {dr.cat}">{dr.label}</span>
+              <span class="group-agg">{dr.count} · CPU {fmtPct(dr.aggCpu)} · {fmtBytes(dr.aggMem)}</span>
             </td>
           </tr>
-          {#if !collapsed.has(g.cat)}
-            {#each g.items as p (p.pid)}{@render row(p, 0)}{/each}
-          {/if}
-        {/each}
-      {:else if treeRows}
-        {#each treeRows as { proc, depth } (proc.pid)}{@render row(proc, depth)}{/each}
-      {:else}
-        {#each rows as p (p.pid)}{@render row(p, 0)}{/each}
-      {/if}
+        {:else}
+          {@render row(dr.proc, dr.depth)}
+        {/if}
+      {/each}
+      {#if padBottom > 0}<tr class="vspacer" aria-hidden="true"><td colspan={colCount} style="height:{padBottom}px"></td></tr>{/if}
     </tbody>
   </table>
 </div>
@@ -320,6 +357,9 @@
   }
   th.num { text-align: right; }
   td { padding: 0.32rem 0.6rem; border-bottom: 1px solid var(--border-faint); white-space: nowrap; }
+  /* Fixed row height keeps the virtual-scroll offsets exact (ROW_H = 28 in script). */
+  tbody tr:not(.vspacer) { height: 28px; box-sizing: border-box; }
+  .vspacer td { padding: 0; border: none; }
   tbody tr { cursor: pointer; }
   tbody tr:hover:not(.group-row) { background: var(--bg-hover); }
   tr.selected { background: var(--accent-bg) !important; }
