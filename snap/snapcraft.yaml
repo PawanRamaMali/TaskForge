@@ -1,0 +1,64 @@
+# Snap recipe for the Ubuntu Software (Snap Store) build.
+#
+# STARTING RECIPE - validate with a local `snapcraft` (LXD/multipass) build
+# before the first store upload; Tauri frontend+Rust builds usually need one
+# or two iterations here. See PACKAGING.md for the confinement trade-off: a
+# process manager needs system-observe + process-control, and priority/affinity
+# on other processes may still require classic confinement (store-reviewed).
+name: taskforge
+base: core22
+version: '0.1.0'
+summary: Process and resource manager with a live dashboard
+description: |
+  TaskForge is a cross-platform task manager with a live resource dashboard
+  (CPU, per-core, memory, per-drive disk, network, temperatures, and NVIDIA
+  GPU), a searchable and groupable process list, a process inspector, and
+  guarded process actions (priority, affinity, suspend/resume, end task).
+grade: stable
+confinement: strict
+license: MIT
+compression: lzo
+
+apps:
+  taskforge:
+    command: usr/bin/task-manager
+    desktop: usr/share/applications/TaskForge.desktop
+    extensions: [gnome]
+    plugs:
+      - home
+      - network
+      - system-observe   # read /proc for other processes (the monitor)
+      - process-control  # send signals: suspend/resume, end task
+      - hardware-observe  # temperatures / sensors
+      - mount-observe     # per-drive disk stats
+
+parts:
+  frontend:
+    plugin: npm
+    npm-include-node: true
+    npm-node-version: '20.18.1'
+    source: .
+    override-build: |
+      npm ci
+      npm run build
+      craftctl default
+
+  taskforge:
+    after: [frontend]
+    plugin: rust
+    source: .
+    rust-path: [src-tauri]
+    build-packages:
+      - libwebkit2gtk-4.1-dev
+      - libsoup-3.0-dev
+      - libjavascriptcoregtk-4.1-dev
+      - libayatana-appindicator3-dev
+      - librsvg2-dev
+      - libxdo-dev
+      - build-essential
+    stage-packages:
+      - libwebkit2gtk-4.1-0
+      - libsoup-3.0-0
+      - libayatana-appindicator3-1
+      - librsvg2-2
+      - libxdo3

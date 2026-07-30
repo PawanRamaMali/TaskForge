@@ -82,6 +82,7 @@ const CRITICAL_NAMES: &[&str] = &[
     "login",
 ];
 
+#[cfg(windows)]
 const SYSTEM_USERS: &[&str] = &[
     "system",
     "local service",
