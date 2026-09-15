@@ -51,3 +51,31 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy --all-targets
         continue-on-error: true
+
+  # The Linux job never compiles #[cfg(windows)] code (actions/windows.rs,
+  # diagnostics/windows.rs), so build it on Windows too.
+  check-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Rust build
+        working-directory: src-tauri
+        run: cargo build --locked
+
+      - name: Rust tests compile
+        working-directory: src-tauri
+        run: cargo test --locked --no-run
+
+      - name: Rust lint (informational)
+        working-directory: src-tauri
+        run: cargo clippy --all-targets
+        continue-on-error: true
