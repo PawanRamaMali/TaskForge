@@ -8,6 +8,7 @@ import type {
   ProcessDetails,
   Snapshot,
 } from './types';
+import { analyze, toMarkdown, type RawDiagnostics, type StabilityReport } from './diagnostics';
 
 const HISTORY = 60;
 
@@ -190,6 +191,20 @@ class AppStore {
 
   async applyOptimize(actions: PlannedAction[]): Promise<ActionResult[]> {
     return invoke<ActionResult[]>('apply_optimize', { actions });
+  }
+
+  async runDiagnostics(windowDays: number): Promise<StabilityReport> {
+    const raw = await invoke<RawDiagnostics>('run_diagnostics', { windowDays });
+    return analyze(raw);
+  }
+
+  async saveDiagnosticsReport(report: StabilityReport) {
+    try {
+      const path = await invoke<string>('save_diagnostics_report', { content: toMarkdown(report) });
+      this.toast('ok', `report saved - ${path}`);
+    } catch (e) {
+      this.toast('error', `save report: ${e}`);
+    }
   }
 }
 

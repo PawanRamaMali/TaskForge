@@ -3,11 +3,13 @@
   import StatCard from '$lib/StatCard.svelte';
   import ProcessTable from '$lib/ProcessTable.svelte';
   import OptimizeDialog from '$lib/OptimizeDialog.svelte';
+  import StabilityDialog from '$lib/StabilityDialog.svelte';
   import DetailPanel from '$lib/DetailPanel.svelte';
   import Toasts from '$lib/Toasts.svelte';
   import { fmtBytes, fmtPct, fmtBps } from '$lib/format';
 
   let showOptimize = $state(false);
+  let showStability = $state(false);
   let showCores = $state(false);
   let selectedPid = $state<number | null>(null);
 
@@ -59,6 +61,9 @@
     <div class="header-actions">
       <button class="icon-btn" title="Toggle light/dark theme" onclick={() => store.toggleTheme()}>
         {store.theme === 'dark' ? '☀' : '☾'}
+      </button>
+      <button class="btn" onclick={() => (showStability = true)} title="Find out why the system crashes, freezes or hangs">
+        Stability check
       </button>
       <button class="btn primary" onclick={() => (showOptimize = true)} disabled={!s}>⚡ Optimize all</button>
     </div>
@@ -134,6 +139,9 @@
 
 {#if showOptimize}
   <OptimizeDialog onclose={() => (showOptimize = false)} />
+{/if}
+{#if showStability}
+  <StabilityDialog onclose={() => (showStability = false)} />
 {/if}
 <Toasts />
 

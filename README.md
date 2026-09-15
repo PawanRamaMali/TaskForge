@@ -20,6 +20,10 @@ A cross-platform task manager (Windows 11 + Ubuntu) built with Tauri v2, Rust, a
 - **Persistent priority rules** (ProBalance-lite) - remember "always run *chrome.exe* at Below-normal" and re-apply automatically whenever that executable starts. Stored in a config file.
 - **Optimize All** - scans for non-essential helpers (updaters, telemetry) and sustained resource hogs, shows a preview of planned actions, and applies only what you leave checked.
 
+**Diagnostics**
+
+- **Stability check** - answers "why does this machine crash, freeze or hang?". It reads the OS crash history (unexpected shutdowns, blue screens and their stop codes, hard freezes), graphics driver timeouts/resets, hypervisor and hardware (WHEA/MCE) errors, out-of-memory events, storage and network driver failures, app crashes/hangs, driver and firmware age, and crash-dump settings. It then ranks likely causes with evidence and concrete next steps, links app crashes to GPU errors that happened at the same moment, and shows a timeline. Pick a 7-180 day look-back; copy or save the report as Markdown. Read-only: Windows uses a PowerShell collector over the event logs/CIM, Linux uses the systemd journal. Run elevated for disk reliability counters and live kernel dumps.
+
 **Quality-of-life**
 
 - System-tray icon with live CPU/RAM tooltip; click to restore the window.
