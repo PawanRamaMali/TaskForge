@@ -24,11 +24,18 @@ pub fn collect(window_days: u32) -> Result<Value, String> {
     // ---- Kernel warnings/errors across all boots in the window ----
     let since = format!("-{window_days}d");
     let mut events: Vec<Value> = Vec::new();
-    match run(
+    let mut journal_limited = false;
+    // `-k` implies the current boot only; match the kernel transport instead so errors
+    // from boots that ended in a crash are included. No `-q`: its stderr hint is how we
+    // learn that the user can't see system/kernel records.
+    match run_full(
         "journalctl",
-        &["-k", "--no-pager", "-q", "-o", "short-unix", "-p", "warning", "--since", &since],
+        &["_TRANSPORT=kernel", "--no-pager", "-o", "short-unix", "-p", "warning", "--since", &since],
     ) {
-        Some(out) => {
+        Some((out, err)) => {
+            if err.contains("not seeing messages") || err.contains("insufficient permissions") {
+                journal_limited = true;
+            }
             for line in out.lines() {
                 let Some((ts, msg)) = parse_short_unix(line) else {
                     continue;
@@ -45,10 +52,13 @@ pub fn collect(window_days: u32) -> Result<Value, String> {
                 }
             }
         }
-        None => notes.push(
-            "journalctl could not be read; add your user to the systemd-journal or adm group for kernel history."
+        None => journal_limited = true,
+    }
+    if journal_limited {
+        notes.push(
+            "The system journal is restricted for this user, so kernel and crash history is incomplete; add the user to the systemd-journal or adm group, or run elevated."
                 .into(),
-        ),
+        );
     }
     // Newest first, matching the Windows collector.
     events.reverse();
@@ -56,7 +66,10 @@ pub fn collect(window_days: u32) -> Result<Value, String> {
 
     // ---- Previous boots that ended without a clean shutdown ----
     let mut shutdowns: Vec<Value> = Vec::new();
-    for boot in 1..=20 {
+    // With a restricted journal, previous boots show only the user's own records, so the
+    // shutdown markers would be missing and every boot would look unclean.
+    let max_boots = if journal_limited { 0 } else { 20 };
+    for boot in 1..=max_boots {
         let arg = format!("-{boot}");
         let Some(out) = run(
             "journalctl",
@@ -202,6 +215,7 @@ pub fn collect(window_days: u32) -> Result<Value, String> {
         "drivers": drivers,
         "config": config,
         "notes": notes,
+        "limited": journal_limited,
     }))
 }
 
@@ -247,11 +261,19 @@ fn classify(msg: &str) -> Option<&'static str> {
 }
 
 fn run(cmd: &str, args: &[&str]) -> Option<String> {
+    run_full(cmd, args).map(|(stdout, _)| stdout)
+}
+
+/// Run a command and return (stdout, stderr) if it exited successfully.
+fn run_full(cmd: &str, args: &[&str]) -> Option<(String, String)> {
     let out = Command::new(cmd).args(args).output().ok()?;
     if !out.status.success() {
         return None;
     }
-    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+    Some((
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    ))
 }
 
 /// `short-unix` lines look like "1726373207.123456 host ident[pid]: message".

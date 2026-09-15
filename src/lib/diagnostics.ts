@@ -128,6 +128,8 @@ export interface RawDiagnostics {
   drivers: RawDriver[];
   config: RawConfig;
   notes: string[];
+  /** Linux: the journal was only partially readable, so absence of findings proves nothing. */
+  limited?: boolean;
 }
 
 export interface Finding {
@@ -311,6 +313,7 @@ interface Crash {
   lastAlive: number | null;
   code: number;
   resumed: boolean;
+  powerButton: boolean;
 }
 
 export function analyze(raw: RawDiagnostics): StabilityReport {
@@ -321,7 +324,10 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
   const cfg: Partial<RawConfig> = raw.config ?? {};
   const drivers = arr(raw.drivers);
   const faults = arr(raw.appFaults);
-  const reports = arr(raw.kernelReports);
+  // The collector looks back further to dedupe WER resubmissions; only keep report groups
+  // that were active inside the selected window.
+  const cutoff = raw.collectedAt - days * 86_400;
+  const reports = arr(raw.kernelReports).filter((r) => r.last >= cutoff);
   const sys = raw.system ?? ({} as RawDiagnostics['system']);
   const findings: Finding[] = [];
   const timeline: TimelineEntry[] = [];
@@ -336,10 +342,16 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
       usedBugchecks.add(idx);
       code = code || bugchecks[idx].code;
     }
-    return { ts: s.ts, lastAlive: s.lastAlive, code, resumed: !!(s.resumedFromSleep || s.sleepInProgress) };
+    return {
+      ts: s.ts,
+      lastAlive: s.lastAlive,
+      code,
+      resumed: !!(s.resumedFromSleep || s.sleepInProgress),
+      powerButton: !!(s.powerButton || s.longPowerPress),
+    };
   });
   bugchecks.forEach((b, i) => {
-    if (!usedBugchecks.has(i)) crashes.push({ ts: b.ts, lastAlive: null, code: b.code, resumed: false });
+    if (!usedBugchecks.has(i)) crashes.push({ ts: b.ts, lastAlive: null, code: b.code, resumed: false, powerButton: false });
   });
   crashes.sort((a, b) => b.ts - a.ts);
 
@@ -352,19 +364,19 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
     timeline.push({
       ts: c.lastAlive ?? c.ts,
       severity: 'critical',
-      label: c.code ? `Blue screen ${describeCode(c.code)}` : 'Hard freeze / forced power-off',
+      label: c.code ? `Blue screen ${describeCode(c.code)}` : 'Shutdown with no stop code (freeze or power loss)',
     });
   }
 
   if (crashes.length) {
     const parts = [];
-    if (freezes.length) parts.push(plural(freezes.length, 'hard freeze', 'hard freezes'));
+    if (freezes.length) parts.push(`${freezes.length} with no stop code`);
     if (blueScreens.length) parts.push(plural(blueScreens.length, 'blue screen'));
     const implicated = [...new Set(blueScreens.map((c) => BUGCHECKS[c.code]?.area).filter(Boolean))] as Area[];
     const actions: string[] = [];
     if (freezes.length && isWindows) {
       actions.push(
-        'Make the next freeze leave evidence: add the DWORD CrashOnCtrlScroll=1 under HKLM\\SYSTEM\\CurrentControlSet\\Services\\kbdhid\\Parameters and ...\\Services\\i8042prt\\Parameters, reboot, and when the system hangs hold Right Ctrl and press Scroll Lock twice. Windows then writes a MANUALLY_INITIATED_CRASH (0xE2) dump showing what was stuck, instead of a silent power-off.'
+        'If the system was frozen before these shutdowns, make the next freeze leave evidence: add the DWORD CrashOnCtrlScroll=1 under HKLM\\SYSTEM\\CurrentControlSet\\Services\\kbdhid\\Parameters and ...\\Services\\i8042prt\\Parameters, reboot, and when the system hangs hold Right Ctrl and press Scroll Lock twice. Windows then writes a MANUALLY_INITIATED_CRASH (0xE2) dump showing what was stuck, instead of a silent power-off.'
       );
     }
     if (blueScreens.length && isWindows) {
@@ -380,13 +392,17 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
       title: `${plural(crashes.length, 'unexpected shutdown')} in the last ${days} days (${parts.join(', ')})`,
       detail:
         (freezes.length
-          ? 'A hard freeze records no stop code: the system stopped responding and was powered off by hand or lost power. '
+          ? 'A shutdown with no stop code means the OS never recorded a crash: either the system hung and was powered off by hand, or it lost power (battery, adapter, reset). '
           : '') +
         (implicated.length
           ? `The blue screens implicate ${implicated.map((a) => AREA_LABELS[a]).join(' and ')}; see the related findings below.`
           : 'See the related findings below for the subsystems showing errors before these shutdowns.'),
       evidence: crashes.map((c) => {
-        const what = c.code ? `blue screen ${describeCode(c.code)}` : 'hard freeze or forced power-off (no stop code)';
+        const what = c.code
+          ? `blue screen ${describeCode(c.code)}`
+          : c.powerButton
+            ? 'no stop code, power button was pressed (likely forced off after a hang)'
+            : 'no stop code (hang then forced power-off, or power loss)';
         const alive = c.lastAlive ? `, last alive ${fmtTs(c.lastAlive)}` : '';
         const sleep = c.resumed ? ', right after resuming from sleep' : '';
         return `${fmtTs(c.ts)}: ${what}${alive}${sleep}`;
@@ -823,6 +839,19 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
     });
   }
 
+  if (raw.limited) {
+    findings.push({
+      id: 'access',
+      severity: 'warning',
+      area: 'Access',
+      title: 'System log access is restricted, results are incomplete',
+      detail:
+        'This user can only see part of the system journal, so kernel errors and previous-boot crashes may be missing. A clean report here does not mean the system is stable.',
+      evidence: [],
+      actions: ['Add the user to the systemd-journal group ("sudo usermod -aG systemd-journal $USER"), log out and back in, then re-run the check.'],
+    });
+  }
+
   findings.sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]);
   timeline.sort((a, b) => b.ts - a.ts);
 
@@ -833,14 +862,14 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
     headline = `This system crashed or froze ${plural(crashes.length, 'time')} in ${days} days.`;
     if (causes.length) headline += ` Main suspects: ${causes.slice(0, 3).map((f) => f.area.toLowerCase()).join(', ')}.`;
   } else if (verdict === 'critical' || verdict === 'warning') {
-    headline = `No crashes recorded, but ${plural(causes.length, 'issue')} need attention.`;
+    headline = `No crashes recorded, but ${plural(causes.length, 'issue')} ${causes.length === 1 ? 'needs' : 'need'} attention.`;
   } else {
     headline = `No stability problems found in the last ${days} days.`;
   }
 
   const stats: StatChip[] = [
     { label: 'Unexpected shutdowns', value: crashes.length, severity: crashes.length ? 'critical' : 'ok' },
-    { label: 'Hard freezes', value: freezes.length, severity: freezes.length ? 'critical' : 'ok' },
+    { label: 'Freezes / power losses', value: freezes.length, severity: freezes.length ? 'critical' : 'ok' },
     { label: 'Blue screens', value: blueScreens.length, severity: blueScreens.length ? 'critical' : 'ok' },
     { label: 'GPU driver resets', value: gpuEpisodes.length, severity: gpuEpisodes.length ? 'warning' : 'ok' },
     { label: 'Out of memory', value: memEvents.length, severity: memEvents.length ? 'warning' : 'ok' },
