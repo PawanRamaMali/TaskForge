@@ -1,5 +1,6 @@
 pub mod actions;
 pub mod classify;
+mod diagnostics;
 mod gpu;
 pub mod model;
 mod optimize;
@@ -237,6 +238,33 @@ fn apply_optimize(
     optimize::apply(&state, actions)
 }
 
+/// Gather crash, hang and hardware-error history. Runs on a blocking worker because
+/// event log queries take several seconds and would otherwise freeze the UI.
+#[tauri::command]
+async fn run_diagnostics(window_days: Option<u32>) -> Result<serde_json::Value, String> {
+    let days = window_days.unwrap_or(60).clamp(1, 365);
+    tauri::async_runtime::spawn_blocking(move || diagnostics::collect(days))
+        .await
+        .map_err(|e| format!("diagnostics task failed: {e}"))?
+}
+
+/// Write a rendered stability report to the user's Documents folder; returns the path.
+#[tauri::command]
+fn save_diagnostics_report(app: tauri::AppHandle, content: String) -> Result<String, String> {
+    let dir = app
+        .path()
+        .document_dir()
+        .or_else(|_| app.path().temp_dir())
+        .map_err(|e| e.to_string())?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let path = dir.join(format!("TaskForge-stability-report-{stamp}.md"));
+    std::fs::write(&path, content).map_err(|e| format!("could not save report: {e}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -268,7 +296,9 @@ pub fn run() {
             set_rule,
             remove_rule,
             plan_optimize,
-            apply_optimize
+            apply_optimize,
+            run_diagnostics,
+            save_diagnostics_report
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
