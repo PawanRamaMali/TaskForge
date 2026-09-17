@@ -4,12 +4,14 @@
   import ProcessTable from '$lib/ProcessTable.svelte';
   import OptimizeDialog from '$lib/OptimizeDialog.svelte';
   import StabilityDialog from '$lib/StabilityDialog.svelte';
+  import SettingsDialog from '$lib/SettingsDialog.svelte';
   import DetailPanel from '$lib/DetailPanel.svelte';
   import Toasts from '$lib/Toasts.svelte';
   import { fmtBytes, fmtPct, fmtBps } from '$lib/format';
 
   let showOptimize = $state(false);
   let showStability = $state(false);
+  let showSettings = $state(false);
   let showCores = $state(false);
   let selectedPid = $state<number | null>(null);
 
@@ -64,6 +66,9 @@
       </button>
       <button class="btn" onclick={() => (showStability = true)} title="Find out why the system crashes, freezes or hangs">
         Stability check
+      </button>
+      <button class="btn" onclick={() => (showSettings = true)} title="Crash capture, Fast Startup, update restarts and autostart">
+        Settings
       </button>
       <button class="btn primary" onclick={() => (showOptimize = true)} disabled={!s}>⚡ Optimize all</button>
     </div>
@@ -142,6 +147,9 @@
 {/if}
 {#if showStability}
   <StabilityDialog onclose={() => (showStability = false)} />
+{/if}
+{#if showSettings}
+  <SettingsDialog onclose={() => (showSettings = false)} />
 {/if}
 <Toasts />
 

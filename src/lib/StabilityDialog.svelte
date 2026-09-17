@@ -1,6 +1,7 @@
 <script lang="ts">
   import { store } from './store.svelte';
   import { fmtTs, toMarkdown, type Severity, type StabilityReport } from './diagnostics';
+  import { sameValue, type SettingFix } from './settings';
 
   let { onclose }: { onclose: () => void } = $props();
 
@@ -20,9 +21,30 @@
     ok: 'OK',
   };
 
+  let applyingFixes = $state(false);
+
+  /** Suggested settings that aren't in place yet (only ones this system supports). */
+  function openFixes(fixes: SettingFix[]): SettingFix[] {
+    return fixes.filter((x) => {
+      const s = store.settings.find((s) => s.id === x.id);
+      return s != null && s.supported && !sameValue(s.value, x.value);
+    });
+  }
+
+  function knownFixes(fixes: SettingFix[]): SettingFix[] {
+    return fixes.filter((x) => store.settings.some((s) => s.id === x.id && s.supported));
+  }
+
+  async function applyFixes(fixes: SettingFix[]) {
+    applyingFixes = true;
+    await store.applySettings(fixes.map((x) => ({ id: x.id, value: x.value })));
+    applyingFixes = false;
+  }
+
   async function run() {
     phase = 'running';
     error = '';
+    store.loadSettings();
     try {
       const r = await store.runDiagnostics(windowDays);
       report = r;
@@ -131,6 +153,20 @@
                   <ol class="actions">
                     {#each f.actions as a}<li>{a}</li>{/each}
                   </ol>
+                {/if}
+                {#if f.fixes && knownFixes(f.fixes).length}
+                  {@const known = knownFixes(f.fixes)}
+                  {@const open = openFixes(known)}
+                  <div class="fixes">
+                    <span class="fix-list">Settings that help: {known.map((x) => x.label).join(', ')}</span>
+                    {#if open.length}
+                      <button class="btn small" disabled={applyingFixes} onclick={() => applyFixes(open)}>
+                        {applyingFixes ? 'Applying…' : `Apply ${open.length} setting${open.length === 1 ? '' : 's'}`}
+                      </button>
+                    {:else}
+                      <span class="applied">✓ Applied</span>
+                    {/if}
+                  </div>
                 {/if}
               </div>
             {/if}
@@ -267,6 +303,13 @@
   .evidence, .actions { margin: 0; padding-left: 1.2rem; }
   .evidence li { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: 0.72rem; color: var(--fg-dim); margin-bottom: 0.15rem; word-break: break-word; }
   .actions li { margin-bottom: 0.3rem; }
+  .fixes {
+    display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.6rem;
+    padding: 0.45rem 0.6rem; border-radius: 8px; background: var(--accent-bg);
+  }
+  .fix-list { flex: 1; font-size: 0.76rem; }
+  .btn.small { padding: 0.25rem 0.6rem; font-size: 0.74rem; }
+  .applied { color: var(--ok); font-size: 0.76rem; font-weight: 600; }
 
   .timeline { list-style: none; margin: 0; padding: 0; font-size: 0.78rem; }
   .timeline li { display: flex; align-items: center; gap: 0.5rem; padding: 0.18rem 0; }

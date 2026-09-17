@@ -2,6 +2,8 @@
 // (src-tauri/src/diagnostics) into ranked findings with evidence and next steps.
 // Pure and dependency-free so it can also be run under Node against a saved report.
 
+import type { SettingFix } from './settings';
+
 export type Severity = 'critical' | 'warning' | 'info' | 'ok';
 
 export interface RawEvent {
@@ -22,6 +24,15 @@ export interface RawShutdown {
   resumedFromSleep: boolean;
   powerButton: boolean;
   longPowerPress: boolean;
+}
+
+/** A restart or shutdown requested by a program (System log, User32 1074). */
+export interface RawRestart {
+  ts: number;
+  process: string;
+  reason: string;
+  action: string;
+  user: string;
 }
 
 export interface RawBugcheck {
@@ -119,6 +130,7 @@ export interface RawDiagnostics {
     lastBoot: number | null;
   };
   shutdowns: RawShutdown[];
+  restarts?: RawRestart[];
   bugchecks: RawBugcheck[];
   kernelReports: RawKernelReport[];
   events: RawEvent[];
@@ -140,6 +152,8 @@ export interface Finding {
   detail: string;
   evidence: string[];
   actions: string[];
+  /** Stability settings that address this finding, applied from the dialog. */
+  fixes?: SettingFix[];
 }
 
 export interface TimelineEntry {
@@ -228,6 +242,23 @@ const AREA_LABELS: Record<Area, string> = {
   system: 'Windows system process',
   manual: 'manually triggered',
 };
+
+const WINDOWS_CRASH_FIXES: SettingFix[] = [
+  { id: 'crash_key', value: { on: true }, label: 'Ctrl+Scroll crash key' },
+  { id: 'dump_automatic', value: { on: true }, label: 'Automatic memory dump' },
+  { id: 'keep_dumps', value: { on: true }, label: 'Keep dump files' },
+  { id: 'dumps_not_cleaned', value: { on: true }, label: 'Keep dumps out of disk cleanup' },
+];
+
+const LINUX_CRASH_FIXES: SettingFix[] = [
+  { id: 'persistent_journal', value: { on: true }, label: 'Persistent journal' },
+  { id: 'kdump', value: { on: true }, label: 'Kernel crash dumps (kdump)' },
+];
+
+const FAST_STARTUP_OFF: SettingFix = { id: 'fast_startup', value: { on: false }, label: 'Turn off Fast Startup' };
+
+// Programs Windows Update uses when it restarts the PC to finish an install.
+const UPDATE_RESTARTERS = /\\(MoUsoCoreWorker|TrustedInstaller|UsoClient|wuauclt)\.exe/i;
 
 function arr<T>(v: T[] | T | null | undefined): T[] {
   if (Array.isArray(v)) return v;
@@ -408,6 +439,7 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
         return `${fmtTs(c.ts)}: ${what}${alive}${sleep}`;
       }),
       actions,
+      fixes: isWindows ? WINDOWS_CRASH_FIXES : LINUX_CRASH_FIXES,
     });
   }
 
@@ -711,6 +743,7 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
         ...(cfg.fastStartup ? ['Turn off Fast Startup (Control Panel > Power Options > Choose what the power buttons do) so a shutdown fully resets drivers.'] : []),
         'While troubleshooting, prefer shutdown or hibernate over sleep and see whether the crashes stop.',
       ],
+      fixes: cfg.fastStartup ? [FAST_STARTUP_OFF] : undefined,
     });
   } else if (cfg.fastStartup && crashes.length) {
     findings.push({
@@ -722,6 +755,7 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
         'With Fast Startup, "Shut down" hibernates the kernel and drivers instead of restarting them, so a driver stuck in a bad state survives a shutdown. Only Restart gives a truly fresh start.',
       evidence: [],
       actions: ['Turn off Fast Startup while troubleshooting (Control Panel > Power Options > Choose what the power buttons do), and use Restart rather than Shut down after a driver update.'],
+      fixes: [FAST_STARTUP_OFF],
     });
   }
 
@@ -756,6 +790,7 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
           'In Disk Cleanup and Storage Sense, stop deleting "System error memory dump files".',
           'Set System Properties > Advanced > Startup and Recovery > Write debugging information to "Automatic memory dump", and keep a page file on C:, which Windows needs to write the dump.',
         ],
+        fixes: WINDOWS_CRASH_FIXES.filter((f) => f.id !== 'crash_key'),
       });
     }
   }
@@ -836,6 +871,36 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
       detail: 'Background services that crash repeatedly can stall logon, shutdown or the apps that depend on them.',
       evidence: tally(serviceCrashes.map((e) => e.message), 5),
       actions: ['Update or uninstall the software that owns the failing service.'],
+    });
+  }
+
+  // ---- Planned restarts by Windows Update ----
+  const updateRestarts = arr(raw.restarts).filter(
+    (r) =>
+      UPDATE_RESTARTERS.test(r.process) ||
+      (/^Operating System: (Service pack|Upgrade|Hot ?fix|Security)/i.test(r.reason) && /SYSTEM$/i.test(r.user))
+  );
+  // One update restart logs several requests within minutes; count each burst once.
+  const restartBursts = episodes(updateRestarts.map((r) => r.ts), 900);
+  for (const ep of restartBursts) timeline.push({ ts: ep.start, severity: 'info', label: 'Windows Update restarted the PC' });
+  if (restartBursts.length) {
+    const exeName = (r: RawRestart) => r.process.replace(/ \(.*\)$/, '').split('\\').pop() ?? r.process;
+    findings.push({
+      id: 'update-restarts',
+      severity: 'info',
+      area: 'Updates',
+      title: `Windows Update restarted the PC ${plural(restartBursts.length, 'time')}`,
+      detail:
+        'These were planned restarts to finish installing updates, not crashes, but they can still close work you left running.',
+      evidence: restartBursts.map((ep) => {
+        const names = [...new Set(updateRestarts.filter((r) => r.ts >= ep.start && r.ts <= ep.end).map(exeName))];
+        return `${fmtTs(ep.start)}: ${names.join(', ')}${ep.count > 1 ? ` (${ep.count} restart requests)` : ''}`;
+      }),
+      actions: ['Turn on "No auto-restart while signed in" and restart notifications, then restart when it suits you.'],
+      fixes: [
+        { id: 'no_auto_restart', value: { on: true }, label: 'No auto-restart while signed in' },
+        { id: 'restart_notify', value: { on: true }, label: 'Restart notifications' },
+      ],
     });
   }
 
@@ -924,6 +989,7 @@ export function toMarkdown(r: StabilityReport): string {
     lines.push(`## [${SEVERITY_WORD[f.severity]}] ${f.title}`, '', f.detail, '');
     if (f.evidence.length) lines.push('Evidence:', ...f.evidence.map((e) => `- ${e}`), '');
     if (f.actions.length) lines.push('What to do:', ...f.actions.map((a, i) => `${i + 1}. ${a}`), '');
+    if (f.fixes?.length) lines.push(`Settings that help: ${f.fixes.map((x) => x.label).join(', ')}`, '');
   }
   if (r.timeline.length) {
     lines.push('## Timeline', '', ...r.timeline.map((t) => `- ${fmtTs(t.ts)} [${SEVERITY_WORD[t.severity]}] ${t.label}`), '');
