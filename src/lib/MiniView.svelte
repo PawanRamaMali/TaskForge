@@ -89,7 +89,7 @@
         <div class="row" title="{s.gpu.name ?? 'GPU'}{s.gpu.memUsed != null ? ` · ${fmtBytes(s.gpu.memUsed)} / ${fmtBytes(s.gpu.memTotal)}` : ''}">
           <span class="k">GPU</span>
           <span class="v" style="color: #53c98b">
-            {fmtPct(s.gpu.utilization, 0)}{#if s.gpu.temperatureC != null}<small> {s.gpu.temperatureC}°</small>{/if}
+            {fmtPct(s.gpu.utilization, 0)}{#if s.gpu.temperatureC != null}<small class="temp">{s.gpu.temperatureC}°</small>{/if}
           </span>
           <Sparkline data={store.gpuHistory} color="#53c98b" height={20} />
         </div>
@@ -116,7 +116,8 @@
 
 <style>
   .mini {
-    height: 100vh;
+    height: 100%;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
     background: var(--bg);
@@ -156,6 +157,7 @@
   .rows {
     display: flex;
     flex-direction: column;
+    justify-content: space-evenly;
     gap: 0.2rem;
     padding: 0.35rem 0.55rem 0.2rem;
     flex: 1;
@@ -163,9 +165,14 @@
   }
   .row {
     display: grid;
-    grid-template-columns: 2.1rem 4.6rem 1fr;
+    /* minmax(0, ...) so the canvas can't widen the graph column past the window. */
+    grid-template-columns: 2.1rem 4.6rem minmax(0, 1fr);
     align-items: center;
     gap: 0.35rem;
+  }
+  .row :global(canvas) {
+    min-width: 0;
+    display: block;
   }
   .k {
     font-size: 0.66rem;
@@ -184,6 +191,9 @@
     font-size: 0.62rem;
     font-weight: 500;
     color: var(--fg-dim);
+  }
+  .temp {
+    margin-left: 0.25rem;
   }
   .foot {
     display: flex;

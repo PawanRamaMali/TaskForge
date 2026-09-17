@@ -14,9 +14,12 @@
   import Toasts from '$lib/Toasts.svelte';
   import { fmtBytes, fmtPct, fmtBps } from '$lib/format';
 
-  let showOptimize = $state(false);
-  let showStability = $state(false);
-  let showSettings = $state(false);
+  // Demo mode (dev only) can open a dialog straight away, for screenshots.
+  const demoOpen = import.meta.env.DEV ? new URLSearchParams(location.search).get('open') : null;
+
+  let showOptimize = $state(demoOpen === 'optimize');
+  let showStability = $state(demoOpen === 'stability');
+  let showSettings = $state(demoOpen === 'settings');
   let showCores = $state(false);
   let selectedPid = $state<number | null>(null);
 
