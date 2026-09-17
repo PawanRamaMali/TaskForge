@@ -39,6 +39,7 @@ Screenshots use made-up demo data.
   | Crash capture | Ctrl+Scroll crash key, automatic memory dump, keep dump files, keep dumps out of disk cleanup | persistent journal, kdump |
   | Startup | Fast Startup on or off | - |
   | Updates | no auto-restart while signed in, restart notifications, active hours | stop unattended-upgrades from rebooting |
+  | System | open TaskForge in place of Task Manager (Ctrl+Shift+Esc / Ctrl+Alt+Del) | - |
   | App | start TaskForge at sign-in | autostart entry |
 
   Current values are read without admin rights. Changes that need them ask once (UAC on Windows, pkexec on Linux) and run through TaskForge itself in a helper mode that only accepts entries from a built-in list. Your original values are saved in the app config folder and each setting can be restored. The Linux system settings aren't available in the Snap build.

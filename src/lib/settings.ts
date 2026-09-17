@@ -38,7 +38,7 @@ export interface SettingFix {
   label: string;
 }
 
-export const GROUP_ORDER = ['Crash capture', 'Startup', 'Updates', 'App'];
+export const GROUP_ORDER = ['Crash capture', 'Startup', 'Updates', 'System', 'App'];
 
 export function isToggle(v: SettingValue | null | undefined): v is ToggleValue {
   return !!v && 'on' in v;

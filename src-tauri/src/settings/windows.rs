@@ -19,6 +19,9 @@ const AU: &str = r"HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU";
 const UX: &str = r"HKLM\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings";
 const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "TaskForge";
+// Image File Execution Options: a Debugger here launches in place of taskmgr.exe.
+const IFEO_TASKMGR: &str =
+    r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\taskmgr.exe";
 
 /// Every registry value TaskForge may change. The elevated helper only accepts
 /// indexes into this table, so it can't be pointed at any other value.
@@ -183,6 +186,18 @@ const DEFS: &[Def] = &[
         needs_restart: false,
         note: None,
     },
+    Def {
+        id: "replace_taskmgr",
+        group: "System",
+        label: "Open TaskForge with Ctrl+Shift+Esc",
+        description: "Make Windows open TaskForge in place of Task Manager, including from Ctrl+Alt+Del > Task Manager and Ctrl+Shift+Esc.",
+        kind: "toggle",
+        slots: &[],
+        recommended: None,
+        needs_admin: true,
+        needs_restart: false,
+        note: Some("Turn this off before uninstalling TaskForge, or those shortcuts won't open anything."),
+    },
 ];
 
 pub fn list(backups: &Backups) -> Vec<SettingState> {
@@ -206,8 +221,8 @@ pub fn list(backups: &Backups) -> Vec<SettingState> {
 
 pub fn apply(backups: &mut Backups, changes: Vec<SettingChange>) -> Vec<ChangeResult> {
     let mut results = Vec::new();
-    let mut writes: Vec<(usize, Option<u32>)> = Vec::new();
-    // Settings written through the registry, with the value that was asked for.
+    // Helper-arg tokens to apply, elevated in one batch (one UAC prompt).
+    let mut tokens: Vec<String> = Vec::new();
     let mut pending: Vec<(&'static str, Option<SettingValue>)> = Vec::new();
 
     for change in changes {
@@ -219,27 +234,34 @@ pub fn apply(backups: &mut Backups, changes: Vec<SettingChange>) -> Vec<ChangeRe
             results.push(apply_autostart(backups, change.value));
             continue;
         }
-        let planned = match change.value {
-            Some(value) => plan(def.id, value),
-            None => restore_plan(def, backups.get(def.id)),
-        };
-        match planned {
-            Ok(p) => {
+        let planned = if def.id == "replace_taskmgr" {
+            taskmgr_tokens(change.value, backups)
+        } else {
+            let slots = match change.value {
+                Some(value) => plan(def.id, value),
+                None => restore_plan(def, backups.get(def.id)),
+            };
+            slots.map(|w| {
                 if change.value.is_some() {
                     backups.remember(def.id, snapshot(def));
                 }
-                writes.extend(p);
+                w.into_iter().map(|(slot, v)| slot_token(slot, v)).collect()
+            })
+        };
+        match planned {
+            Ok(t) => {
+                tokens.extend(t);
                 pending.push((def.id, change.value));
             }
             Err(e) => results.push(ChangeResult::failure(def.id, e)),
         }
     }
 
-    if !writes.is_empty() {
+    if !tokens.is_empty() {
         let outcome = if crate::actions::is_elevated() {
-            write_all(&writes)
+            apply_tokens(&tokens)
         } else {
-            write_elevated(&writes)
+            apply_elevated(&tokens)
         };
         for (id, requested) in pending {
             let result = match (&outcome, requested) {
@@ -259,21 +281,43 @@ pub fn apply(backups: &mut Backups, changes: Vec<SettingChange>) -> Vec<ChangeRe
     results
 }
 
-/// Elevated helper: `task-manager --apply-settings s<slot>=<value|-> ...`.
+/// Elevated helper: `task-manager --apply-settings <token> ...`, where each token
+/// is `s<slot>=<value|->` or `taskmgr=on|off`. Only these fixed targets can be
+/// written, so the helper can't be pointed at arbitrary registry values.
 pub fn run_helper(args: &[String]) -> i32 {
-    let mut writes = Vec::new();
-    for arg in args {
-        match parse_write(arg) {
-            Some(w) => writes.push(w),
-            None => return 2,
-        }
-    }
-    match write_all(&writes) {
+    match apply_tokens(args) {
         Ok(()) => 0,
         Err(e) => {
             eprintln!("{e}");
             1
         }
+    }
+}
+
+fn apply_tokens(tokens: &[String]) -> Result<(), String> {
+    let errors: Vec<String> = tokens.iter().filter_map(|t| apply_token(t).err()).collect();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+fn apply_token(arg: &str) -> Result<(), String> {
+    if let Some((slot, value)) = parse_write(arg) {
+        return write_slot(slot, value);
+    }
+    match arg {
+        "taskmgr=on" => set_taskmgr_debugger(true),
+        "taskmgr=off" => set_taskmgr_debugger(false),
+        other => Err(format!("unknown change '{other}'")),
+    }
+}
+
+fn slot_token(slot: usize, value: Option<u32>) -> String {
+    match value {
+        Some(v) => format!("s{slot}={v}"),
+        None => format!("s{slot}=-"),
     }
 }
 
@@ -289,6 +333,61 @@ fn parse_write(arg: &str) -> Option<(usize, Option<u32>)> {
         Some(value.parse::<u32>().ok()?)
     };
     Some((slot, value))
+}
+
+/// The Debugger under the taskmgr.exe IFEO key, if any.
+fn taskmgr_debugger() -> Option<String> {
+    query(IFEO_TASKMGR, "Debugger").map(|(_, data)| data)
+}
+
+/// Does a Debugger command point at this TaskForge executable?
+fn is_our_taskmgr(debugger: &str) -> bool {
+    std::env::current_exe().ok().is_some_and(|exe| {
+        debugger.trim().trim_matches('"').eq_ignore_ascii_case(exe.to_string_lossy().trim())
+    })
+}
+
+fn taskmgr_tokens(
+    value: Option<SettingValue>,
+    backups: &mut Backups,
+) -> Result<Vec<String>, String> {
+    match value {
+        Some(SettingValue::Toggle { on: true }) => {
+            // Refuse if some other program already redirects Task Manager.
+            if let Some(dbg) = taskmgr_debugger() {
+                if !is_our_taskmgr(&dbg) {
+                    return Err("another program already redirects Task Manager".into());
+                }
+            }
+            backups.remember("replace_taskmgr", serde_json::json!({ "ours": true }));
+            Ok(vec!["taskmgr=on".into()])
+        }
+        Some(SettingValue::Toggle { on: false }) => Ok(vec!["taskmgr=off".into()]),
+        Some(_) => Err("this value doesn't fit the setting".into()),
+        // Restore: TaskForge only ever sets this itself, so restoring means removing it.
+        None if backups.has("replace_taskmgr") => Ok(vec!["taskmgr=off".into()]),
+        None => Err("no saved value to restore".into()),
+    }
+}
+
+fn set_taskmgr_debugger(on: bool) -> Result<(), String> {
+    if on {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        // IFEO appends the original taskmgr.exe path as an argument, which TaskForge ignores.
+        let data = format!("\"{}\"", exe.display());
+        check(
+            reg(&["add", IFEO_TASKMGR, "/v", "Debugger", "/t", "REG_SZ", "/d", &data, "/f"]),
+            "Debugger",
+        )
+    } else {
+        // Only remove our own redirect; never touch another program's debugger.
+        match taskmgr_debugger() {
+            Some(dbg) if is_our_taskmgr(&dbg) => {
+                check(reg(&["delete", IFEO_TASKMGR, "/v", "Debugger", "/f"]), "Debugger")
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 fn read_value(id: &str) -> Option<SettingValue> {
@@ -310,6 +409,9 @@ fn read_value(id: &str) -> Option<SettingValue> {
             on: s(NO_REBOOT) == Some(1) && s(SCHED_REBOOT) != Some(1),
         },
         "restart_notify" => Toggle { on: s(RESTART_NOTIFY) == Some(1) },
+        "replace_taskmgr" => Toggle {
+            on: taskmgr_debugger().is_some_and(|d| is_our_taskmgr(&d)),
+        },
         "active_hours" => Hours {
             start: s(HOURS_START)?.min(23) as u8,
             end: s(HOURS_END)?.min(23) as u8,
@@ -510,26 +612,13 @@ fn write_slot(slot: usize, value: Option<u32>) -> Result<(), String> {
     check(out, name)
 }
 
-fn write_all(writes: &[(usize, Option<u32>)]) -> Result<(), String> {
-    let errors: Vec<String> = writes
-        .iter()
-        .filter_map(|&(slot, value)| write_slot(slot, value).err())
-        .collect();
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors.join("; "))
-    }
-}
-
-/// Run this executable as administrator in helper mode and wait for it. Only
-/// slot indexes and numbers are passed, so nothing needs quoting beyond the path.
-fn write_elevated(writes: &[(usize, Option<u32>)]) -> Result<(), String> {
+/// Run this executable as administrator in helper mode and wait for it. Each token
+/// is a fixed `s<slot>=…` or `taskmgr=…` string, so nothing needs quoting beyond the path.
+fn apply_elevated(tokens: &[String]) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut args = vec![format!("'{HELPER_FLAG}'")];
-    for &(slot, value) in writes {
-        let v = value.map_or_else(|| "-".to_string(), |n| n.to_string());
-        args.push(format!("'s{slot}={v}'"));
+    for token in tokens {
+        args.push(format!("'{token}'"));
     }
     let script = format!(
         "try {{ $p = Start-Process -FilePath '{}' -ArgumentList {} -Verb RunAs -Wait -PassThru -ErrorAction Stop; exit $p.ExitCode }} catch {{ exit {ERROR_CANCELLED} }}",
@@ -591,6 +680,22 @@ mod tests {
         assert_eq!(parse_write("s99=1"), None);
         assert_eq!(parse_write("HKLM=1"), None);
         assert_eq!(parse_write("s1=abc"), None);
+    }
+
+    #[test]
+    fn apply_token_rejects_unknown_and_routes_taskmgr() {
+        // taskmgr tokens are not slot writes.
+        assert_eq!(parse_write("taskmgr=on"), None);
+        // An unrecognized token is refused, never written anywhere.
+        assert!(apply_token("wipe=everything").is_err());
+        assert!(apply_token("s99=1").is_err());
+    }
+
+    #[test]
+    fn slot_token_roundtrips() {
+        assert_eq!(slot_token(2, Some(7)), "s2=7");
+        assert_eq!(slot_token(8, None), "s8=-");
+        assert_eq!(parse_write(&slot_token(4, Some(50))), Some((4, Some(50))));
     }
 
     #[test]
