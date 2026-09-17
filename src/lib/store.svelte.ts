@@ -9,6 +9,7 @@ import type {
   Snapshot,
 } from './types';
 import { analyze, toMarkdown, type RawDiagnostics, type StabilityReport } from './diagnostics';
+import type { ChangeResult, SettingChange, SettingState } from './settings';
 
 const HISTORY = 60;
 
@@ -44,6 +45,7 @@ class AppStore {
   toasts = $state<Toast[]>([]);
   theme = $state<'dark' | 'light'>(initialTheme());
   rules = $state<PriorityRule[]>([]);
+  settings = $state<SettingState[]>([]);
   private started = false;
 
   async start() {
@@ -196,6 +198,33 @@ class AppStore {
   async runDiagnostics(windowDays: number): Promise<StabilityReport> {
     const raw = await invoke<RawDiagnostics>('run_diagnostics', { windowDays });
     return analyze(raw);
+  }
+
+  async loadSettings() {
+    try {
+      this.settings = await invoke<SettingState[]>('list_settings');
+    } catch (e) {
+      this.toast('error', `settings: ${e}`);
+    }
+  }
+
+  async applySettings(changes: SettingChange[]): Promise<ChangeResult[]> {
+    let results: ChangeResult[];
+    try {
+      results = await invoke<ChangeResult[]>('apply_settings', { changes });
+    } catch (e) {
+      this.toast('error', `settings: ${e}`);
+      return [];
+    }
+    const label = (id: string) => this.settings.find((s) => s.id === id)?.label ?? id;
+    const failed = results.filter((r) => !r.ok);
+    if (failed.length) {
+      this.toast('error', failed.map((r) => `${label(r.id)}: ${r.error}`).join(' · '));
+    } else if (results.length) {
+      this.toast('ok', `${results.length} setting${results.length === 1 ? '' : 's'} updated`);
+    }
+    await this.loadSettings();
+    return results;
   }
 
   async saveDiagnosticsReport(report: StabilityReport) {

@@ -6,6 +6,7 @@ pub mod model;
 mod optimize;
 mod rules;
 mod sampler;
+pub mod settings;
 
 use std::sync::Arc;
 
@@ -265,6 +266,32 @@ fn save_diagnostics_report(app: tauri::AppHandle, content: String) -> Result<Str
     Ok(path.to_string_lossy().to_string())
 }
 
+fn settings_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path().app_config_dir().map_err(|e| e.to_string())
+}
+
+/// Current state of the Stability settings (no admin rights needed).
+#[tauri::command]
+async fn list_settings(app: tauri::AppHandle) -> Result<Vec<settings::SettingState>, String> {
+    let dir = settings_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || settings::list(&dir))
+        .await
+        .map_err(|e| format!("settings task failed: {e}"))
+}
+
+/// Apply or restore Stability settings. Asks for admin rights once when needed,
+/// which blocks until the prompt is answered, so it runs off the main thread.
+#[tauri::command]
+async fn apply_settings(
+    app: tauri::AppHandle,
+    changes: Vec<settings::SettingChange>,
+) -> Result<Vec<settings::ChangeResult>, String> {
+    let dir = settings_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || settings::apply(&dir, changes))
+        .await
+        .map_err(|e| format!("settings task failed: {e}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -298,7 +325,9 @@ pub fn run() {
             plan_optimize,
             apply_optimize,
             run_diagnostics,
-            save_diagnostics_report
+            save_diagnostics_report,
+            list_settings,
+            apply_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

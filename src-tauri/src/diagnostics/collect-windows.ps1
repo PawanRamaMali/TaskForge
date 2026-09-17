@@ -121,6 +121,18 @@ $shutdowns = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName
     }
   })
 
+# ---- Restarts requested by software (Windows Update and others) ---------
+$restarts = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'User32'; Id = 1074; StartTime = $since } |
+  ForEach-Object {
+    [pscustomobject]@{
+      ts      = Ts $_.TimeCreated
+      process = "$($_.Properties[0].Value)"
+      reason  = "$($_.Properties[2].Value)"
+      action  = "$($_.Properties[4].Value)"
+      user    = "$($_.Properties[6].Value)"
+    }
+  })
+
 # ---- Blue screens (WER-SystemErrorReporting 1001) ------------------------
 $bugchecks = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-WER-SystemErrorReporting'; Id = 1001; StartTime = $since } |
   ForEach-Object {
@@ -246,6 +258,7 @@ $report = [pscustomobject]@{
   elevated      = $elevated
   system        = $system
   shutdowns     = $shutdowns
+  restarts      = $restarts
   bugchecks     = $bugchecks
   kernelReports = $kernelReports
   events        = @($events)

@@ -206,6 +206,7 @@ pub fn collect(window_days: u32) -> Result<Value, String> {
         "elevated": crate::actions::is_elevated(),
         "system": system,
         "shutdowns": shutdowns,
+        "restarts": [],
         "bugchecks": [],
         "kernelReports": [],
         "events": events,

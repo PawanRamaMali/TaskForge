@@ -24,6 +24,17 @@ A cross-platform task manager (Windows 11 + Ubuntu) built with Tauri v2, Rust, a
 
 - **Stability check** - answers "why does this machine crash, freeze or hang?". It reads the OS crash history (unexpected shutdowns, blue screens and their stop codes, hard freezes), graphics driver timeouts/resets, hypervisor and hardware (WHEA/MCE) errors, out-of-memory events, storage and network driver failures, app crashes/hangs, driver and firmware age, and crash-dump settings. It then ranks likely causes with evidence and concrete next steps, links app crashes to GPU errors that happened at the same moment, and shows a timeline. Pick a 7-180 day look-back; copy or save the report as Markdown. Read-only: Windows uses a PowerShell collector over the event logs/CIM, Linux uses the systemd journal. Run elevated for disk reliability counters and live kernel dumps.
 
+- **Stability settings** - one place for the settings that help catch crashes and avoid surprise restarts. Findings in the Stability check can apply them with one click.
+
+  | Group | Windows | Linux |
+  |---|---|---|
+  | Crash capture | Ctrl+Scroll crash key, automatic memory dump, keep dump files, keep dumps out of disk cleanup | persistent journal, kdump |
+  | Startup | Fast Startup on or off | - |
+  | Updates | no auto-restart while signed in, restart notifications, active hours | stop unattended-upgrades from rebooting |
+  | App | start TaskForge at sign-in | autostart entry |
+
+  Current values are read without admin rights. Changes that need them ask once (UAC on Windows, pkexec on Linux) and run through TaskForge itself in a helper mode that only accepts entries from a built-in list. Your original values are saved in the app config folder and each setting can be restored. The Linux system settings aren't available in the Snap build.
+
 **Quality-of-life**
 
 - System-tray icon with live CPU/RAM tooltip; click to restore the window.
