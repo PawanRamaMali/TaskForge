@@ -200,6 +200,15 @@ class AppStore {
     return analyze(raw);
   }
 
+  /** Switch between the full window and the compact always-on-top mini view. */
+  async setMiniMode(on: boolean) {
+    try {
+      await invoke('set_mini_mode', { on });
+    } catch (e) {
+      this.toast('error', `mini view: ${e}`);
+    }
+  }
+
   async loadSettings() {
     try {
       this.settings = await invoke<SettingState[]>('list_settings');
