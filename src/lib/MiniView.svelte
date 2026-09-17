@@ -1,11 +1,12 @@
 <script lang="ts">
   import { availableMonitors, getCurrentWindow } from '@tauri-apps/api/window';
-  import { LogicalPosition } from '@tauri-apps/api/dpi';
+  import { PhysicalPosition } from '@tauri-apps/api/dpi';
   import { store } from './store.svelte';
   import Sparkline from './Sparkline.svelte';
   import { fmtBps, fmtBytes, fmtPct } from './format';
 
-  const POS_KEY = 'taskforge-mini-pos';
+  // Desktop-wide physical pixels: logical values depend on each monitor's scale.
+  const POS_KEY = 'taskforge-mini-pos-px';
 
   const s = $derived(store.snapshot);
   const memPct = $derived(s ? (s.mem.used / s.mem.total) * 100 : 0);
@@ -31,14 +32,13 @@
     (async () => {
       try {
         const saved = JSON.parse(localStorage.getItem(POS_KEY) ?? 'null') as { x: number; y: number } | null;
-        if (saved && (await onScreen(saved))) await win.setPosition(new LogicalPosition(saved.x, saved.y));
+        if (saved && (await onScreen(saved))) await win.setPosition(new PhysicalPosition(saved.x, saved.y));
       } catch {
         // No saved position or storage unavailable: keep the default corner.
       }
-      const stop = await win.onMoved(async ({ payload }) => {
-        const p = payload.toLogical(await win.scaleFactor());
+      const stop = await win.onMoved(({ payload }) => {
         try {
-          localStorage.setItem(POS_KEY, JSON.stringify({ x: Math.round(p.x), y: Math.round(p.y) }));
+          localStorage.setItem(POS_KEY, JSON.stringify({ x: payload.x, y: payload.y }));
         } catch {
           // Position just won't be remembered.
         }
@@ -54,10 +54,15 @@
 
   async function onScreen(p: { x: number; y: number }): Promise<boolean> {
     const monitors = await availableMonitors();
+    // Monitor bounds are in the same desktop-wide physical pixels as the saved point.
     return monitors.some((m) => {
-      const pos = m.position.toLogical(m.scaleFactor);
-      const size = m.size.toLogical(m.scaleFactor);
-      return p.x >= pos.x && p.y >= pos.y && p.x < pos.x + size.width - 60 && p.y < pos.y + size.height - 60;
+      const margin = 60 * m.scaleFactor;
+      return (
+        p.x >= m.position.x &&
+        p.y >= m.position.y &&
+        p.x < m.position.x + m.size.width - margin &&
+        p.y < m.position.y + m.size.height - margin
+      );
     });
   }
 </script>
