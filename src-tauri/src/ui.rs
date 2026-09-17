@@ -6,6 +6,8 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 pub const MINI_LABEL: &str = "mini";
 const MAIN_LABEL: &str = "main";
+/// Argument that marks the elevated copy from "Restart as administrator".
+pub const RELAUNCH_FLAG: &str = "--relaunch";
 const MINI_WIDTH: f64 = 280.0;
 const MINI_HEIGHT: f64 = 224.0;
 
@@ -85,6 +87,54 @@ fn default_position(app: &AppHandle) -> Option<(f64, f64)> {
     let size = monitor.size().to_logical::<f64>(scale);
     let pos = monitor.position().to_logical::<f64>(scale);
     Some((pos.x + size.width - MINI_WIDTH - 16.0, pos.y + 16.0))
+}
+
+/// Windows single-instance guard. Because the "open in place of Task Manager" setting
+/// makes Ctrl+Shift+Esc launch TaskForge, a running instance would otherwise get a new
+/// window, sampler and tray icon on every press. Returns false when another instance was
+/// focused instead and this process should exit.
+#[cfg(windows)]
+pub fn claim_single_instance() -> bool {
+    use windows::core::{HSTRING, PCWSTR};
+    use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+    use windows::Win32::System::Threading::CreateMutexW;
+
+    let relaunch = std::env::args().any(|a| a == RELAUNCH_FLAG);
+    // Session-local name, so a second signed-in user gets their own instance.
+    let name = HSTRING::from("TaskForge-single-instance");
+    let already_running = unsafe {
+        // The handle is intentionally leaked: the OS holds the mutex for this process's
+        // lifetime, and dropping the value does not close the handle.
+        let _ = CreateMutexW(None, false, PCWSTR(name.as_ptr()));
+        GetLastError() == ERROR_ALREADY_EXISTS
+    };
+    // The elevated relaunch takes over as the old instance exits; everyone else forwards.
+    if already_running && !relaunch {
+        focus_running_instance();
+        return false;
+    }
+    true
+}
+
+/// Bring the already-running TaskForge to the front. Tries the mini view first so a
+/// press while in compact mode doesn't pop the full window.
+#[cfg(windows)]
+fn focus_running_instance() {
+    use windows::core::{HSTRING, PCWSTR};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE,
+    };
+    for title in ["TaskForge mini", "TaskForge"] {
+        let t = HSTRING::from(title);
+        unsafe {
+            if let Ok(hwnd) = FindWindowW(PCWSTR::null(), PCWSTR(t.as_ptr())) {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+                if SetForegroundWindow(hwnd).as_bool() {
+                    return;
+                }
+            }
+        }
+    }
 }
 
 fn pref_path(app: &AppHandle) -> Option<std::path::PathBuf> {
