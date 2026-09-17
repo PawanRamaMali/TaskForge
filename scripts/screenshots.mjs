@@ -101,19 +101,32 @@ try {
   const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
   await send('Page.enable', {}, sessionId);
 
+  // Capture everything first so a failure never leaves a mix of old and broken images.
+  const captured = [];
   for (const shot of shots) {
+    const url = `${base}?${shot.query}`;
     await send(
       'Emulation.setDeviceMetricsOverride',
       { width: shot.width, height: shot.height, deviceScaleFactor: shot.scale, mobile: false },
       sessionId
     );
     const loaded = waitFor('Page.loadEventFired', sessionId);
-    await send('Page.navigate', { url: `${base}?${shot.query}` }, sessionId);
+    // A failed navigation resolves with errorText (and may still fire load on the error page).
+    const nav = await send('Page.navigate', { url }, sessionId);
+    if (nav.errorText) throw new Error(`could not open ${url}: ${nav.errorText} (is \`npm run dev\` running?)`);
     await loaded;
     // Let the demo fill its graphs and open any dialog.
     await sleep(3000);
+    const { result } = await send(
+      'Runtime.evaluate',
+      { expression: "!!document.querySelector('main header, .mini .bar') && document.querySelectorAll('canvas').length > 0" },
+      sessionId
+    );
+    if (result.value !== true) throw new Error(`${url} did not render the TaskForge demo UI`);
     const { data } = await send('Page.captureScreenshot', { format: 'png' }, sessionId);
-    const out = join(outDir, shot.file);
+    captured.push({ out: join(outDir, shot.file), data });
+  }
+  for (const { out, data } of captured) {
     writeFileSync(out, Buffer.from(data, 'base64'));
     console.log(`wrote ${out}`);
   }
