@@ -7,7 +7,8 @@ use serde_json::{json, Value};
 
 use super::{Backups, ChangeResult, SettingChange, SettingState, SettingValue, HELPER_FLAG};
 
-const JOURNAL_DROPIN: &str = "/etc/systemd/journald.conf.d/60-taskforge.conf";
+/// Named to sort after most other drop-ins, since the last `Storage=` wins.
+const JOURNAL_DROPIN: &str = "/etc/systemd/journald.conf.d/zz-taskforge.conf";
 const KDUMP_DEFAULTS: &str = "/etc/default/kdump-tools";
 const UU_CONFIG: &str = "/etc/apt/apt.conf.d/50unattended-upgrades";
 const UU_NO_REBOOT: &str = "/etc/apt/apt.conf.d/99taskforge-no-reboot";
@@ -211,18 +212,47 @@ fn support(id: &str) -> (bool, Option<String>) {
 
 fn read_value(id: &str) -> Option<SettingValue> {
     let on = match id {
-        "persistent_journal" => match journal_state() {
-            "on" => true,
-            "off" => false,
-            // journald's default ("auto") is persistent once /var/log/journal exists.
-            _ => Path::new("/var/log/journal").is_dir(),
-        },
+        "persistent_journal" => {
+            let storage = effective_journal_storage().unwrap_or_else(|| {
+                let own = match journal_state() {
+                    "on" => "persistent",
+                    "off" => "volatile",
+                    _ => "auto",
+                };
+                own.to_string()
+            });
+            match storage.as_str() {
+                "persistent" => true,
+                "volatile" | "none" => false,
+                // journald's default ("auto") is persistent once /var/log/journal exists.
+                _ => Path::new("/var/log/journal").is_dir(),
+            }
+        }
         "kdump" => kdump_enabled()?,
         "uu_no_reboot" => !apt_auto_reboot()?,
         "autostart" => autostart_path()?.exists(),
         _ => return None,
     };
     Some(SettingValue::Toggle { on })
+}
+
+/// journald's effective `Storage=` from its merged configuration (main file plus
+/// every drop-in, in load order; the last value wins).
+fn effective_journal_storage() -> Option<String> {
+    let out = Command::new("systemd-analyze")
+        .args(["cat-config", "systemd/journald.conf"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let last = text
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("Storage="))
+        .last()
+        .unwrap_or("auto");
+    Some(last.trim().to_string())
 }
 
 /// "on" / "off" when our journald drop-in exists, otherwise "default".
@@ -291,30 +321,39 @@ fn launch_path() -> Option<PathBuf> {
 }
 
 fn apply_autostart(backups: &mut Backups, value: Option<SettingValue>) -> ChangeResult {
-    let enabled = || autostart_path().map_or(false, |p| p.exists());
-    let on = match value {
+    let outcome = match value {
         Some(SettingValue::Toggle { on }) => {
-            backups.remember("autostart", json!({ "autostart": enabled() }));
-            on
+            // The desktop file exactly as it was, or null if there was none.
+            let before = autostart_path().and_then(|p| std::fs::read_to_string(p).ok());
+            backups.remember("autostart", json!({ "autostart": before }));
+            set_autostart(on)
         }
-        Some(_) => return ChangeResult::failure("autostart", "this value doesn't fit the setting"),
-        None => match backups
-            .get("autostart")
-            .and_then(|v| v.get("autostart"))
-            .and_then(Value::as_bool)
-        {
-            Some(on) => on,
-            None => return ChangeResult::failure("autostart", "no saved value to restore"),
-        },
-    };
-    match set_autostart(on) {
-        Ok(()) => {
-            if value.is_none() {
-                backups.forget("autostart");
+        Some(_) => Err("this value doesn't fit the setting".to_string()),
+        None => {
+            let saved = backups.get("autostart").and_then(|v| v.get("autostart")).cloned();
+            match saved {
+                Some(saved) => restore_autostart(&saved).map(|()| backups.forget("autostart")),
+                None => Err("no saved value to restore".to_string()),
             }
-            ChangeResult::success("autostart")
         }
+    };
+    match outcome {
+        Ok(()) => ChangeResult::success("autostart"),
         Err(e) => ChangeResult::failure("autostart", e),
+    }
+}
+
+fn restore_autostart(saved: &Value) -> Result<(), String> {
+    match saved {
+        Value::Null => set_autostart(false),
+        Value::String(contents) => {
+            let path = autostart_path().ok_or("could not find the config directory")?;
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+            }
+            std::fs::write(&path, contents).map_err(|e| e.to_string())
+        }
+        _ => Err("the saved value is invalid".into()),
     }
 }
 

@@ -305,7 +305,10 @@ fn read_value(id: &str) -> Option<SettingValue> {
         "dumps_not_cleaned" => Toggle { on: s(CLEAN_DUMP) == Some(0) && s(CLEAN_MINI) == Some(0) },
         // Windows treats a missing value as enabled.
         "fast_startup" => Toggle { on: s(HIBERBOOT).map_or(true, |v| v != 0) },
-        "no_auto_restart" => Toggle { on: s(NO_REBOOT) == Some(1) },
+        // A scheduled-reboot policy of 1 still forces restarts, so it must not be set.
+        "no_auto_restart" => Toggle {
+            on: s(NO_REBOOT) == Some(1) && s(SCHED_REBOOT) != Some(1),
+        },
         "restart_notify" => Toggle { on: s(RESTART_NOTIFY) == Some(1) },
         "active_hours" => Hours {
             start: s(HOURS_START)?.min(23) as u8,
@@ -379,34 +382,54 @@ fn restore_plan(def: &Def, saved: Option<&Value>) -> Result<Vec<(usize, Option<u
 }
 
 fn apply_autostart(backups: &mut Backups, value: Option<SettingValue>) -> ChangeResult {
-    let on = match value {
+    let outcome = match value {
         Some(SettingValue::Toggle { on }) => {
-            backups.remember("autostart", json!({ "autostart": autostart_enabled() }));
-            on
+            backups.remember("autostart", json!({ "autostart": autostart_snapshot() }));
+            set_autostart(on)
         }
-        Some(_) => return ChangeResult::failure("autostart", "this value doesn't fit the setting"),
-        None => match backups
-            .get("autostart")
-            .and_then(|v| v.get("autostart"))
-            .and_then(Value::as_bool)
-        {
-            Some(on) => on,
-            None => return ChangeResult::failure("autostart", "no saved value to restore"),
-        },
-    };
-    match set_autostart(on) {
-        Ok(()) => {
-            if value.is_none() {
-                backups.forget("autostart");
+        Some(_) => Err("this value doesn't fit the setting".to_string()),
+        None => {
+            let saved = backups.get("autostart").and_then(|v| v.get("autostart")).cloned();
+            match saved {
+                Some(saved) => restore_autostart(&saved).map(|()| backups.forget("autostart")),
+                None => Err("no saved value to restore".to_string()),
             }
-            ChangeResult::success("autostart")
         }
+    };
+    match outcome {
+        Ok(()) => ChangeResult::success("autostart"),
         Err(e) => ChangeResult::failure("autostart", e),
     }
 }
 
 fn autostart_enabled() -> bool {
     query(RUN_KEY, RUN_VALUE).is_some()
+}
+
+/// The Run entry exactly as it was (type and command), or null if there was none.
+fn autostart_snapshot() -> Value {
+    match query(RUN_KEY, RUN_VALUE) {
+        Some((kind, data)) => json!({ "kind": kind, "data": data }),
+        None => Value::Null,
+    }
+}
+
+fn restore_autostart(saved: &Value) -> Result<(), String> {
+    if saved.is_null() {
+        return set_autostart(false);
+    }
+    let kind = saved.get("kind").and_then(Value::as_str).unwrap_or("REG_SZ");
+    if !matches!(kind, "REG_SZ" | "REG_EXPAND_SZ") {
+        return Err("the saved value is invalid".into());
+    }
+    let data = saved
+        .get("data")
+        .and_then(Value::as_str)
+        .ok_or("the saved value is invalid")?;
+    check(
+        reg(&["add", RUN_KEY, "/v", RUN_VALUE, "/t", kind, "/d", data, "/f"]),
+        RUN_VALUE,
+    )
 }
 
 fn set_autostart(on: bool) -> Result<(), String> {
@@ -447,12 +470,17 @@ fn query(key: &str, name: &str) -> Option<(String, String)> {
     }
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     text.lines().find_map(|line| {
+        let line = line.trim_start();
         let mut parts = line.split_whitespace();
         if !parts.next()?.eq_ignore_ascii_case(name) {
             return None;
         }
         let kind = parts.next()?.to_string();
-        Some((kind, parts.collect::<Vec<_>>().join(" ")))
+        // Keep the data exactly (inner spaces included): it follows the type after
+        // reg's four-space column separator.
+        let rest = line.get(name.len()..)?.trim_start().get(kind.len()..)?;
+        let data = rest.strip_prefix("    ").unwrap_or_else(|| rest.trim_start());
+        Some((kind, data.to_string()))
     })
 }
 
