@@ -37,6 +37,8 @@ A cross-platform task manager (Windows 11 + Ubuntu) built with Tauri v2, Rust, a
 
 **Quality-of-life**
 
+- **Mini view** - a small always-on-top window (280×224) with CPU, memory, GPU, disk and network values and live graphs, plus the hottest temperature and the busiest process. Open it from the header or the tray, drag it by its top bar, and use ⤢ to go back to the full window. TaskForge reopens in the view you used last, and the mini view remembers where you put it.
+
 - System-tray icon with live CPU/RAM tooltip; click to restore the window.
 - One-click **Restart as administrator** (Windows `runas` / Linux `pkexec`).
 - Light and dark themes (persisted).
