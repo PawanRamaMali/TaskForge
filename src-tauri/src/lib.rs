@@ -7,6 +7,7 @@ mod optimize;
 mod rules;
 mod sampler;
 pub mod settings;
+mod ui;
 
 use std::sync::Arc;
 
@@ -292,6 +293,13 @@ async fn apply_settings(
         .map_err(|e| format!("settings task failed: {e}"))
 }
 
+/// Switch between the full window and the compact always-on-top mini view.
+/// Async because creating a window from a sync command can deadlock on Windows.
+#[tauri::command]
+async fn set_mini_mode(app: tauri::AppHandle, on: bool) -> Result<(), String> {
+    ui::set_mini_mode(&app, on).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -307,6 +315,7 @@ pub fn run() {
             }
 
             build_tray(app)?;
+            ui::restore_view(app.handle());
 
             sampler::spawn(app.handle().clone(), state);
             Ok(())
@@ -327,7 +336,8 @@ pub fn run() {
             run_diagnostics,
             save_diagnostics_report,
             list_settings,
-            apply_settings
+            apply_settings,
+            set_mini_mode
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -335,8 +345,9 @@ pub fn run() {
 
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show TaskForge", true, None::<&str>)?;
+    let mini = MenuItem::with_id(app, "mini", "Mini view", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &mini, &quit])?;
 
     let mut builder = TrayIconBuilder::with_id("main")
         .tooltip("TaskForge")
@@ -344,10 +355,10 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => {
-                if let Some(win) = app.get_webview_window("main") {
-                    let _ = win.show();
-                    let _ = win.set_focus();
-                }
+                let _ = ui::set_mini_mode(app, false);
+            }
+            "mini" => {
+                let _ = ui::set_mini_mode(app, true);
             }
             "quit" => app.exit(0),
             _ => {}
@@ -359,10 +370,7 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                 ..
             } = event
             {
-                if let Some(win) = tray.app_handle().get_webview_window("main") {
-                    let _ = win.show();
-                    let _ = win.set_focus();
-                }
+                let _ = ui::set_mini_mode(tray.app_handle(), false);
             }
         });
 

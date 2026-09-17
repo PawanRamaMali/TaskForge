@@ -5,6 +5,11 @@
   import OptimizeDialog from '$lib/OptimizeDialog.svelte';
   import StabilityDialog from '$lib/StabilityDialog.svelte';
   import SettingsDialog from '$lib/SettingsDialog.svelte';
+  import MiniView from '$lib/MiniView.svelte';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
+
+  // The mini view window loads this same page.
+  const isMini = getCurrentWindow().label === 'mini';
   import DetailPanel from '$lib/DetailPanel.svelte';
   import Toasts from '$lib/Toasts.svelte';
   import { fmtBytes, fmtPct, fmtBps } from '$lib/format';
@@ -48,6 +53,9 @@
   );
 </script>
 
+{#if isMini}
+<MiniView />
+{:else}
 <main>
   <header>
     <h1>TaskForge</h1>
@@ -69,6 +77,9 @@
       </button>
       <button class="btn" onclick={() => (showSettings = true)} title="Crash capture, Fast Startup, update restarts and autostart">
         Settings
+      </button>
+      <button class="btn" onclick={() => store.setMiniMode(true)} title="Small always-on-top window with the key graphs">
+        Mini view
       </button>
       <button class="btn primary" onclick={() => (showOptimize = true)} disabled={!s}>⚡ Optimize all</button>
     </div>
@@ -150,6 +161,7 @@
 {/if}
 {#if showSettings}
   <SettingsDialog onclose={() => (showSettings = false)} />
+{/if}
 {/if}
 <Toasts />
 
