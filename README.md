@@ -2,6 +2,14 @@
 
 A cross-platform task manager (Windows 11 + Ubuntu) built with Tauri v2, Rust, and Svelte.
 
+![Dashboard with live graphs and grouped processes](docs/screenshots/dashboard.png)
+
+| Stability check | Stability settings | Mini view |
+|---|---|---|
+| ![Stability check ranking likely causes of crashes](docs/screenshots/stability-check.png) | ![Stability settings with recommended values](docs/screenshots/settings.png) | <img src="docs/screenshots/mini-view.png" alt="Mini view with live graphs" width="280"> |
+
+Screenshots use made-up demo data.
+
 ## Features
 
 **Monitoring**
@@ -94,6 +102,12 @@ Then:
 npm install
 npm run tauri dev
 ```
+
+### Demo mode and screenshots
+
+`npm run dev` and open `http://localhost:1420/?demo` to run the UI in a normal browser with made-up data (no Rust needed). Add `&open=stability`, `&open=settings` or `&open=optimize` to open a dialog, or use `?demo&view=mini` for the mini view. Demo mode only exists in dev builds.
+
+To refresh the README screenshots, keep the dev server running and run `node scripts/screenshots.mjs` (Node 22+, Edge or Chrome installed). They are written to `docs/screenshots/`.
 
 ## Building installers
 
