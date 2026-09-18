@@ -153,12 +153,15 @@ pub fn restart_as_admin() -> Result<(), ActionError> {
         .map_err(|e| ActionError::Os(e.to_string()))?;
     let file = HSTRING::from(exe.as_os_str());
     let verb = HSTRING::from("runas");
+    // Marks the elevated copy as our own relaunch so the single-instance guard lets it
+    // take over instead of forwarding to the instance that is about to exit.
+    let params = HSTRING::from(crate::ui::RELAUNCH_FLAG);
     let result = unsafe {
         ShellExecuteW(
             None,
             PCWSTR(verb.as_ptr()),
             PCWSTR(file.as_ptr()),
-            PCWSTR::null(),
+            PCWSTR(params.as_ptr()),
             PCWSTR::null(),
             SW_NORMAL,
         )

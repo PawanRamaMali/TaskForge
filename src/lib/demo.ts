@@ -298,6 +298,7 @@ function demoSettings(): SettingState[] {
     item('no_auto_restart', 'Updates', 'No auto-restart while signed in', 'Windows Update installs updates but waits for you to restart.', off, on, { note: 'Windows Home may not always follow this policy.' }),
     item('restart_notify', 'Updates', 'Restart notifications', 'Show a notification when an update needs a restart.', on, on),
     item('active_hours', 'Updates', 'Active hours', "Windows won't restart for updates during these hours. 18 hours at most.", { start: 8, end: 23 }, null),
+    item('replace_taskmgr', 'System', 'Open TaskForge with Ctrl+Shift+Esc', 'Make Windows open TaskForge in place of Task Manager, including from Ctrl+Alt+Del > Task Manager and Ctrl+Shift+Esc.', off, null, { note: "Turn this off before uninstalling TaskForge, or those shortcuts won't open anything." }),
     item('autostart', 'App', 'Start TaskForge at sign-in', 'Open TaskForge when you sign in to Windows.', on, null, { needsAdmin: false }),
   ];
 }

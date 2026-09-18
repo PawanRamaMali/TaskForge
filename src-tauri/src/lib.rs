@@ -302,6 +302,12 @@ async fn set_mini_mode(app: tauri::AppHandle, on: bool) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Forward to the already-running instance instead of opening a second window.
+    #[cfg(windows)]
+    if !ui::claim_single_instance() {
+        return;
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(Arc::new(SharedState::default()))
