@@ -152,6 +152,66 @@ $kernelReports = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Pro
     [pscustomobject]@{ kind = $k[0]; code = $k[1]; param1 = $k[2]; submissions = $_.Count; first = Ts $t[0].TimeCreated; last = Ts $t[-1].TimeCreated }
   })
 
+# ---- Storage device attribution ------------------------------------------
+# disk/Ntfs events name a device, not a drive. Unresolved, a USB stick pulled out
+# mid-write looks exactly like a failing system SSD, so resolve what we can here
+# and let the analyzer separate internal disks from removable/detached ones.
+$busNames = @{ 1 = 'SCSI'; 2 = 'ATAPI'; 3 = 'ATA'; 4 = '1394'; 5 = 'SSA'; 6 = 'Fibre'; 7 = 'USB'; 8 = 'RAID'
+  9 = 'iSCSI'; 10 = 'SAS'; 11 = 'SATA'; 12 = 'SD'; 13 = 'MMC'; 14 = 'Virtual'; 15 = 'FileBackedVirtual'
+  16 = 'Spaces'; 17 = 'NVMe'; 18 = 'SCM'; 19 = 'UFS'
+}
+$removableBuses = @('USB', 'SD', 'MMC', '1394')
+
+$diskByIndex = @{}
+foreach ($pd in Get-PhysicalDisk) {
+  $idx = 0
+  if ([int]::TryParse("$($pd.DeviceId)", [ref]$idx)) {
+    $diskByIndex[$idx] = [pscustomobject]@{ model = "$($pd.FriendlyName)".Trim(); bus = "$($pd.BusType)" }
+  }
+}
+$diskByLetter = @{}
+foreach ($part in (Get-Partition | Where-Object DriveLetter)) {
+  $diskByLetter["$($part.DriveLetter):"] = [int]$part.DiskNumber
+}
+
+function StorageDevice($e) {
+  $d = EventData $e
+  $msg = "$($e.Message)"
+  $volume = $null; $bus = $null; $model = $null; $index = $null
+
+  # Ntfs volume events carry the drive and the device identity as named fields.
+  if ($d.VolumeId) { $volume = "$($d.VolumeId)".Trim() }
+  elseif ($msg -match '\b([A-Za-z]):[\\ ]') { $volume = $matches[1].ToUpper() + ':' }
+  $busId = 0
+  if ("$($d.BusType)" -and [int]::TryParse("$($d.BusType)", [ref]$busId) -and $busNames.ContainsKey($busId)) {
+    $bus = $busNames[$busId]
+  }
+  $vendorModel = (("$($d.VendorId) $($d.ProductId)") -replace '\s+', ' ').Trim()
+  if ($vendorModel) { $model = $vendorModel }
+
+  # disk/stornvme events only name the raw device path.
+  $pathMatch = [regex]::Match($msg, '\\Device\\[A-Za-z0-9]+')
+  $path = $(if ($pathMatch.Success) { $pathMatch.Value } else { $null })
+  if ($msg -match '\\Device\\Harddisk(\d+)\\') { $index = [int]$matches[1] }
+  elseif ($volume -and $diskByLetter.ContainsKey($volume)) { $index = $diskByLetter[$volume] }
+
+  $present = $false
+  if ($null -ne $index -and $diskByIndex.ContainsKey($index)) {
+    $present = $true
+    if (-not $model) { $model = $diskByIndex[$index].model }
+    if (-not $bus) { $bus = $diskByIndex[$index].bus }
+  }
+
+  [pscustomobject]@{
+    volume    = $volume
+    model     = $model
+    bus       = $bus
+    path      = $path
+    removable = ($bus -in $removableBuses)
+    present   = $present
+  }
+}
+
 # ---- Categorized System log warnings/errors ------------------------------
 $categories = @(
   @{ cat = 'gpu';      re = '^(nvlddmkm|amdkmdag|amdwddmg|igfx\w*|Display|Microsoft-Windows-DxgKrnl)$' }
@@ -165,20 +225,48 @@ $categories = @(
 )
 $events = New-Object System.Collections.ArrayList
 $perCat = @{}
+$perKey = @{}
+$totals = @{}
+$firstTs = @{}
+$lastTs = @{}
 foreach ($e in (Get-WinEvent -FilterHashtable @{ LogName = 'System'; Level = 1, 2, 3; StartTime = $since })) {
   foreach ($c in $categories) {
     if ($e.ProviderName -match $c.re -and (-not $c.ids -or $c.ids -contains $e.Id)) {
-      if ([int]$perCat[$c.cat] -lt 250) {
+      $lvl = [int]$e.Level
+      $key = "$($c.cat)|$($e.ProviderName)|$($e.Id)|$lvl"
+      $totals[$key] = [int]$totals[$key] + 1
+      # Track the real span too: the sample is capped, so its own first/last would
+      # understate how long a burst actually ran.
+      $when = Ts $e.TimeCreated
+      if (-not $firstTs.ContainsKey($key) -or $when -lt $firstTs[$key]) { $firstTs[$key] = $when }
+      if (-not $lastTs.ContainsKey($key) -or $when -gt $lastTs[$key]) { $lastTs[$key] = $when }
+      # Sample per event id, not per category: some drivers log thousands of routine
+      # warnings a month (Intel Wi-Fi "Driver Info"), which under a flat per-category
+      # cap crowded the real errors out of the report entirely.
+      $cap = $(if ($lvl -le 2) { 120 } else { 40 })
+      if ([int]$perKey[$key] -lt $cap -and [int]$perCat[$c.cat] -lt 400) {
+        $perKey[$key] = [int]$perKey[$key] + 1
         $perCat[$c.cat] = [int]$perCat[$c.cat] + 1
         [void]$events.Add([pscustomobject]@{
-            ts = Ts $e.TimeCreated; source = $e.ProviderName; id = $e.Id; level = [int]$e.Level
+            ts = Ts $e.TimeCreated; source = $e.ProviderName; id = $e.Id; level = $lvl
             category = $c.cat; message = EventText $e
+            device = $(if ($c.cat -eq 'storage') { StorageDevice $e } else { $null })
           })
       }
       break
     }
   }
 }
+
+# How many events each id really produced, so the analyzer can report true counts
+# from a capped sample.
+$eventTotals = @($totals.GetEnumerator() | ForEach-Object {
+    $k = $_.Key -split '\|'
+    [pscustomobject]@{
+      category = $k[0]; source = $k[1]; id = [int]$k[2]; level = [int]$k[3]; count = $_.Value
+      first = $firstTs[$_.Key]; last = $lastTs[$_.Key]
+    }
+  })
 
 # ---- Application crashes and hangs ---------------------------------------
 $appFaults = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1000, 1002; StartTime = $since } |
@@ -215,13 +303,18 @@ $volumes = @(Get-Volume | Where-Object DriveLetter | ForEach-Object {
 
 # ---- Configuration that affects crash capture and stability --------------
 $cc = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl'
-$minidumps = $null
-try { $minidumps = @([IO.Directory]::GetFiles("$env:SystemRoot\Minidump", '*.dmp')).Count } catch {}
-$liveDumps = $null
-try {
-  $liveDumps = @([IO.Directory]::GetFiles("$env:SystemRoot\LiveKernelReports", '*.dmp', 'AllDirectories') |
-    ForEach-Object { (Split-Path (Split-Path $_ -Parent) -Leaf) + '\' + (Split-Path $_ -Leaf) })
-} catch {}
+# Dump dates matter: WER re-submits an old report inside a recent window, so the
+# submission time is not the fault time. Null means unreadable (needs admin).
+function DumpFiles([string]$path, [string]$scope = 'TopDirectoryOnly') {
+  try {
+    @([IO.Directory]::GetFiles($path, '*.dmp', $scope) | ForEach-Object {
+        $fi = [IO.FileInfo]$_
+        [pscustomobject]@{ name = $fi.Name; ts = Ts $fi.LastWriteTime }
+      } | Sort-Object ts)
+  } catch { $null }
+}
+$minidumpFiles = DumpFiles "$env:SystemRoot\Minidump"
+$liveDumps = DumpFiles "$env:SystemRoot\LiveKernelReports" 'AllDirectories'
 $dg = Get-CimInstance -Namespace root\Microsoft\Windows\DeviceGuard -ClassName Win32_DeviceGuard
 $memDiag = Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-MemoryDiagnostics-Results' } -MaxEvents 1
 $bootEvents = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-Kernel-General'; Id = 12, 13; StartTime = $since })
@@ -231,7 +324,8 @@ $hiberboot = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session M
 $config = [pscustomobject]@{
   crashDumpMode     = $cc.CrashDumpEnabled
   autoReboot        = [bool]$cc.AutoReboot
-  minidumpCount     = $minidumps
+  minidumpCount     = $(if ($null -ne $minidumpFiles) { @($minidumpFiles).Count } else { $null })
+  minidumps         = $minidumpFiles
   memoryDumpPresent = [bool](Test-Path "$env:SystemRoot\MEMORY.DMP")
   liveKernelDumps   = $liveDumps
   fastStartup       = $(if ($null -ne $hiberboot) { $hiberboot -eq 1 } else { $null })
@@ -262,6 +356,7 @@ $report = [pscustomobject]@{
   bugchecks     = $bugchecks
   kernelReports = $kernelReports
   events        = @($events)
+  eventTotals   = @($eventTotals)
   appFaults     = $appFaults
   disks         = $disks
   volumes       = $volumes

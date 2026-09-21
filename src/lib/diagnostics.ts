@@ -13,6 +13,35 @@ export interface RawEvent {
   level: number;
   category: string;
   message: string;
+  /** Storage events only: which drive the event names, resolved by the collector. */
+  device?: RawStorageDevice | null;
+}
+
+/** The drive a storage event is about. `present` is false once it has been detached. */
+export interface RawStorageDevice {
+  volume: string | null;
+  model: string | null;
+  bus: string | null;
+  /** Raw device path from the event, kept for drives that are no longer attached. */
+  path: string | null;
+  removable: boolean;
+  present: boolean;
+}
+
+/** Uncapped per-id counts, so a sampled report can still state true totals. */
+export interface RawEventTotal {
+  category: string;
+  source: string;
+  id: number;
+  level: number;
+  count: number;
+  first?: number | null;
+  last?: number | null;
+}
+
+export interface RawDumpFile {
+  name: string;
+  ts: number;
 }
 
 export interface RawShutdown {
@@ -96,8 +125,10 @@ export interface RawConfig {
   crashDumpMode: number | null;
   autoReboot: boolean | null;
   minidumpCount: number | null;
+  minidumps?: RawDumpFile[] | null;
   memoryDumpPresent: boolean;
-  liveKernelDumps: string[] | null;
+  /** Older collectors emitted plain names here; both shapes are accepted. */
+  liveKernelDumps: (RawDumpFile | string)[] | null;
   fastStartup: boolean | null;
   hypervisorPresent: boolean | null;
   vbsRunning: boolean | null;
@@ -134,6 +165,7 @@ export interface RawDiagnostics {
   bugchecks: RawBugcheck[];
   kernelReports: RawKernelReport[];
   events: RawEvent[];
+  eventTotals?: RawEventTotal[];
   appFaults: RawAppFault[];
   disks: RawDisk[];
   volumes: RawVolume[];
@@ -318,25 +350,36 @@ function episodes(times: number[], gap = 300): Episode[] {
   return out;
 }
 
-/** Collapse near-identical messages (device paths, ids, addresses) and count them. */
+/** Normalize a message (device paths, ids, addresses) so near-identical ones group. */
+function messageKey(m: string): string | null {
+  const key = m
+    .replace(/\\Device\\\S+/g, '')
+    .replace(/\((GPC|TPC|SM)[^)]*\)/g, '')
+    .replace(/0x[0-9a-f]+/gi, '#')
+    .replace(/\b\d+\b/g, '#')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160);
+  // Skip payloads that are only hex/ids once normalized (e.g. raw Wi-Fi driver dumps).
+  return key && /[a-z]{3,}.*[a-z]{3,}/i.test(key.replace(/^\S+ #: /, '')) ? key : null;
+}
+
+/** Collapse near-identical messages and count them. */
 function tally(messages: string[], limit = 4): string[] {
   const counts = new Map<string, number>();
   for (const m of messages) {
-    const key = m
-      .replace(/\\Device\\\S+/g, '')
-      .replace(/\((GPC|TPC|SM)[^)]*\)/g, '')
-      .replace(/0x[0-9a-f]+/gi, '#')
-      .replace(/\b\d+\b/g, '#')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 160);
-    // Skip payloads that are only hex/ids once normalized (e.g. raw Wi-Fi driver dumps).
-    if (key && /[a-z]{3,}.*[a-z]{3,}/i.test(key.replace(/^\S+ #: /, ''))) counts.set(key, (counts.get(key) ?? 0) + 1);
+    const key = messageKey(m);
+    if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   return [...counts.entries()]
     .sort((a, b) => b[1] - a[1])
     .slice(0, limit)
     .map(([k, n]) => `${n}x "${k}"`);
+}
+
+function describeStorageDevice(d: RawStorageDevice): string {
+  const bits = [d.model, d.bus ? `${d.bus} bus` : null, d.volume, d.path].filter(Boolean);
+  return `${bits.length ? bits.join(', ') : 'unidentified device'}${d.present ? '' : ' - not attached now'}`;
 }
 
 interface Crash {
@@ -352,6 +395,51 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
   const isWindows = raw.platform === 'windows';
   const events = arr(raw.events);
   const byCat = (c: string) => events.filter((e) => e.category === c);
+  // The collector keeps a sample per event id and reports the real counts separately.
+  // Only scale a subset up when every sampled event of that id belongs to it, so a split
+  // (internal vs removable disk, failure vs noise) never inflates its own count.
+  const eventTotals = arr(raw.eventTotals);
+  const idKey = (e: RawEvent) => `${e.category}|${e.source}|${e.id}`;
+  const trueCount = (subset: RawEvent[], all: RawEvent[]): number => {
+    if (!eventTotals.length) return subset.length;
+    let n = 0;
+    for (const key of new Set(subset.map(idKey))) {
+      const sampled = subset.filter((e) => idKey(e) === key).length;
+      const mixed = all.some((e) => idKey(e) === key && !subset.includes(e));
+      const total = eventTotals
+        .filter((t) => `${t.category}|${t.source}|${t.id}` === key)
+        .reduce((a, t) => a + t.count, 0);
+      n += mixed || !total ? sampled : total;
+    }
+    return n;
+  };
+  /** Like tally(), but counts each group against the uncapped totals rather than the
+   *  sample, so evidence lines agree with the counts in the titles. */
+  const tallyEvents = (subset: RawEvent[], limit = 4, withSource = true): string[] => {
+    const groups = new Map<string, RawEvent[]>();
+    for (const e of subset) {
+      const key = messageKey(withSource ? `${e.source} ${e.id}: ${e.message}` : e.message);
+      if (!key) continue;
+      const g = groups.get(key);
+      if (g) g.push(e);
+      else groups.set(key, [e]);
+    }
+    return [...groups.entries()]
+      // Compare against the whole subset: ids shared by several message groups must not
+      // let one group claim the id's full total.
+      .map(([key, g]) => ({ key, n: trueCount(g, subset) }))
+      .sort((a, b) => b.n - a.n)
+      .slice(0, limit)
+      .map(({ key, n }) => `${n}x "${key}"`);
+  };
+  /** True first/last timestamps for a set of events, from the uncapped totals. */
+  const trueSpan = (subset: RawEvent[]): { first: number; last: number } => {
+    const keys = new Set(subset.map(idKey));
+    const rows = eventTotals.filter((t) => keys.has(`${t.category}|${t.source}|${t.id}`));
+    const firsts = [...subset.map((e) => e.ts), ...rows.map((t) => t.first).filter((v): v is number => !!v)];
+    const lasts = [...subset.map((e) => e.ts), ...rows.map((t) => t.last).filter((v): v is number => !!v)];
+    return { first: Math.min(...firsts), last: Math.max(...lasts) };
+  };
   const cfg: Partial<RawConfig> = raw.config ?? {};
   const drivers = arr(raw.drivers);
   const faults = arr(raw.appFaults);
@@ -448,6 +536,17 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
   const gpuCrashes = crashAreas('gpu');
   const gpuReports = reportAreas('gpu');
   const gpuEpisodes = episodes(gpuEvents.map((e) => e.ts));
+  // WER re-submits an old report inside a recent window, so a report's timestamps say
+  // when Windows queued it, not when the GPU hung. The dump file date is the fault date.
+  const dumpFiles: RawDumpFile[] = arr(cfg.liveKernelDumps).map((d) =>
+    typeof d === 'string' ? { name: d, ts: 0 } : d
+  );
+  const gpuDumps = dumpFiles.filter((d) => d.ts > 0 && /watchdog|video|dxg|tdr|nvlddmkm|igdkmd/i.test(d.name));
+  const gpuDumpsInWindow = gpuDumps.filter((d) => d.ts >= cutoff);
+  // Reports on file, but every dump behind them predates the window.
+  const gpuStaleOnly =
+    !gpuEvents.length && !gpuCrashes.length && gpuReports.length > 0 && gpuDumps.length > 0 && !gpuDumpsInWindow.length;
+  const gpuResetCount = gpuStaleOnly ? 0 : Math.max(gpuEpisodes.length, gpuReports.length);
   for (const ep of gpuEpisodes) {
     timeline.push({ ts: ep.start, severity: 'warning', label: `Graphics driver error / reset (${plural(ep.count, 'event')})` });
   }
@@ -478,17 +577,30 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
 
     const evidence: string[] = [];
     if (gpuEvents.length) {
-      const times = gpuEvents.map((e) => e.ts);
+      const span = trueSpan(gpuEvents);
+      const times = [span.first, span.last];
       evidence.push(
-        `${plural(gpuEpisodes.length, 'error burst')} (${plural(gpuEvents.length, 'driver event')}) between ${fmtTs(Math.min(...times))} and ${fmtTs(Math.max(...times))}`
+        `${plural(gpuEpisodes.length, 'error burst')} (${plural(trueCount(gpuEvents, gpuEvents), 'driver event')}) between ${fmtTs(Math.min(...times))} and ${fmtTs(Math.max(...times))}`
       );
-      evidence.push(...tally(gpuEvents.map((e) => `${e.source} ${e.id}: ${e.message}`)));
+      evidence.push(...tallyEvents(gpuEvents));
     }
     for (const c of gpuCrashes) evidence.push(`${fmtTs(c.ts)}: system crashed with ${describeCode(c.code)}`);
     if (gpuReports.length) {
       const codes = [...new Set(gpuReports.map((r) => describeCode(codeNum(r.code))))];
-      const first = Math.min(...gpuReports.map((r) => r.first));
-      evidence.push(`Windows captured ${plural(gpuReports.length, 'distinct GPU timeout report')} (${codes.join(', ')}), earliest ${fmtTs(first)}`);
+      const lastSubmitted = Math.max(...gpuReports.map((r) => r.last));
+      evidence.push(
+        `Windows has ${plural(gpuReports.length, 'distinct GPU timeout report')} (${codes.join(', ')}) on file, last queued for upload ${fmtTs(lastSubmitted)}`
+      );
+      for (const d of gpuDumps) {
+        evidence.push(`dump ${d.name} written ${fmtTs(d.ts)}${d.ts < cutoff ? ` - before the ${days}-day window` : ''}`);
+      }
+      if (gpuStaleOnly) {
+        evidence.push(`No GPU timeout dump was written inside the last ${days} days; the reports above are re-submissions of older ones`);
+      } else if (cfg.liveKernelDumps == null && !raw.elevated) {
+        evidence.push(
+          'Dump dates need administrator rights to read, so these reports cannot be tied to a fault inside this window; re-run elevated to date them'
+        );
+      }
     }
     for (const [app, t] of correlated) evidence.push(`${app} failed at ${fmtTs(t)}, within two minutes of a GPU error`);
     if (vendorDriver) {
@@ -512,11 +624,13 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
 
     findings.push({
       id: 'gpu',
-      severity: gpuCrashes.length ? 'critical' : gpuEpisodes.length >= 3 || gpuReports.length ? 'warning' : 'info',
+      severity: gpuCrashes.length ? 'critical' : gpuStaleOnly ? 'info' : gpuEpisodes.length >= 3 || gpuReports.length ? 'warning' : 'info',
       area: 'Graphics',
       title: gpuCrashes.length
         ? `Graphics driver failures crashed the system ${plural(gpuCrashes.length, 'time')}`
-        : `Graphics driver stopped responding ${plural(Math.max(gpuEpisodes.length, gpuReports.length), 'time')}`,
+        : gpuStaleOnly
+          ? `Graphics driver timed out ${plural(gpuReports.length, 'time')}, all of them before this window`
+          : `Graphics driver stopped responding ${plural(Math.max(gpuEpisodes.length, gpuReports.length), 'time')}`,
       detail:
         'The GPU stopped responding and the OS tried to reset its driver. When a reset fails the result is a VIDEO_TDR_FAILURE blue screen or a frozen screen. Frequent resets point to the graphics driver, an unstable GPU overclock/undervolt, overheating, or, if they persist on a clean stock setup, faulty graphics hardware.',
       evidence,
@@ -572,12 +686,12 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
       id: 'hardware',
       severity: 'critical',
       area: 'Hardware',
-      title: `CPU/PCIe hardware errors reported (${plural(hwEvents.length + hwCrashes.length, 'record')})`,
+      title: `CPU/PCIe hardware errors reported (${plural(trueCount(hwEvents, hwEvents) + hwCrashes.length, 'record')})`,
       detail:
         'The processor or a PCIe device reported a machine-check / WHEA error. Corrected errors are early warnings; uncorrected ones crash the system. Causes are overclocking or undervolting, overheating, outdated firmware, or failing hardware.',
       evidence: [
         ...hwCrashes.map((c) => `${fmtTs(c.ts)}: system crashed with ${describeCode(c.code)}`),
-        ...tally(hwEvents.map((e) => e.message), 5),
+        ...tallyEvents(hwEvents, 5, false),
       ],
       actions: [
         'Return CPU, memory and GPU to stock settings (no overclock, undervolt or XMP) and update the BIOS.',
@@ -589,6 +703,7 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
 
   // ---- Memory pressure ----
   const memEvents = byCat('memory');
+  const memCount = trueCount(memEvents, memEvents);
   for (const e of memEvents) timeline.push({ ts: e.ts, severity: 'warning', label: isWindows ? 'Ran out of virtual memory' : 'Out-of-memory kill' });
   const commitRatio = cfg.commitUsedGb != null && cfg.commitLimitGb ? cfg.commitUsedGb / cfg.commitLimitGb : null;
   if (memEvents.length || (commitRatio != null && commitRatio > 0.85)) {
@@ -616,8 +731,8 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
       area: 'Memory',
       title: memEvents.length
         ? isWindows
-          ? `System ran out of virtual memory ${plural(memEvents.length, 'time')}`
-          : `Kernel killed processes for lack of memory ${plural(memEvents.length, 'time')}`
+          ? `System ran out of virtual memory ${plural(memCount, 'time')}`
+          : `Kernel killed processes for lack of memory ${plural(memCount, 'time')}`
         : 'Committed memory is close to the limit',
       detail:
         'When committed memory reaches the limit (RAM plus page file), allocations fail, apps freeze and the whole desktop can appear hung for minutes. A runaway process is a common cause of "random" freezes.',
@@ -656,6 +771,17 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
   const dumpFailures = storageEvents.filter((e) => e.source.toLowerCase() === 'volmgr' && e.id === 161);
   const shadowDrops = storageEvents.filter((e) => e.source.toLowerCase() === 'volsnap');
   const realStorage = storageEvents.filter((e) => !['volmgr', 'volsnap'].includes(e.source.toLowerCase()));
+  // A USB drive pulled out mid-write logs the same disk/Ntfs errors as a dying system SSD.
+  // Controller drivers always describe internal disks, whatever device the message names.
+  const INTERNAL_SOURCES = /^(stornvme|storahci|iastor|volmgr)/i;
+  const onRemovableDrive = (e: RawEvent) => {
+    const d = e.device;
+    if (!d || INTERNAL_SOURCES.test(e.source)) return false;
+    return d.removable || !d.present;
+  };
+  const externalStorage = realStorage.filter(onRemovableDrive);
+  const internalStorage = realStorage.filter((e) => !onRemovableDrive(e));
+  const internalCount = trueCount(internalStorage, storageEvents);
   const seriousIds = new Set([7, 11, 51, 55, 98, 129, 140, 153, 157]);
   const disks = arr(raw.disks);
   const badDisks = disks.filter(
@@ -665,17 +791,21 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
   const lowSpace = arr(raw.volumes).filter((v) => v.sizeGb > 0 && v.freeGb / v.sizeGb < 0.1);
   const diskLine = (d: RawDisk) =>
     `${d.name} (${d.bus} ${d.media}, ${d.sizeGb} GB): ${d.health}${d.wearPct != null ? `, wear ${d.wearPct}%` : ''}${d.tempMaxC ? `, max ${d.tempMaxC} C` : ''}${d.readErrors ? `, ${d.readErrors} uncorrected read errors` : ''}`;
-  if (realStorage.length || badDisks.length || worn.length || lowSpace.length) {
-    const serious = badDisks.length || realStorage.some((e) => seriousIds.has(e.id));
+  if (internalStorage.length || badDisks.length || worn.length || lowSpace.length) {
+    const serious = badDisks.length || internalStorage.some((e) => seriousIds.has(e.id));
     findings.push({
       id: 'storage',
       severity: serious ? 'critical' : 'warning',
       area: 'Storage',
-      title: badDisks.length ? 'A drive reports health problems' : realStorage.length ? `Storage errors logged (${plural(realStorage.length, 'event')})` : 'Storage needs attention',
+      title: badDisks.length
+        ? 'A drive reports health problems'
+        : internalStorage.length
+          ? `Storage errors logged (${plural(internalCount, 'event')})`
+          : 'Storage needs attention',
       detail:
         'Disk timeouts and read errors stall everything waiting on I/O, which looks like a system freeze, and can crash Windows when the page file or system files are affected.',
       evidence: [
-        ...tally(realStorage.map((e) => `${e.source} ${e.id}: ${e.message}`), 5),
+        ...tallyEvents(internalStorage, 5),
         ...disks.map(diskLine),
         ...lowSpace.map((v) => `${v.drive} has only ${v.freeGb} GB free of ${v.sizeGb} GB`),
       ],
@@ -691,33 +821,96 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
       severity: 'ok',
       area: 'Storage',
       title: 'Drives look healthy',
-      detail: 'No disk, controller or file system errors were logged in this period.',
+      detail: 'No disk, controller or file system errors were logged for the internal drives in this period.',
       evidence: [
         ...disks.map(diskLine),
+        ...(externalStorage.length ? ['Errors on another drive are reported separately below'] : []),
         ...(shadowDrops.length ? [`${plural(shadowDrops.length, 'restore-point storage warning')} under heavy disk load (harmless for stability)`] : []),
       ],
       actions: [],
     });
   }
 
+  // ---- Errors that belong to a removable or detached drive ----
+  if (externalStorage.length) {
+    const externalCount = trueCount(externalStorage, storageEvents);
+    // One line per drive: events about the same volume or device arrive with varying
+    // detail, so keep the most descriptive form of each.
+    const byDrive = new Map<string, string>();
+    for (const e of externalStorage) {
+      if (!e.device) continue;
+      const key = e.device.volume ?? e.device.path ?? 'unknown';
+      const line = describeStorageDevice(e.device);
+      if ((byDrive.get(key)?.length ?? 0) < line.length) byDrive.set(key, line);
+    }
+    const named = [...byDrive.values()].slice(0, 5);
+    const dataLoss = externalStorage.some((e) =>
+      /delayed write failed|data has been lost|failed to flush|corruption may occur/i.test(e.message)
+    );
+    const attached = externalStorage.some((e) => e.device?.present);
+    const span = trueSpan(externalStorage);
+    findings.push({
+      id: 'storage-removable',
+      severity: dataLoss && attached ? 'warning' : 'info',
+      area: 'Removable drive',
+      title: `Storage errors came from a drive other than the system disk (${plural(externalCount, 'event')})`,
+      detail: attached
+        ? 'These errors name a removable drive, so they say nothing about the internal disk. A drive that keeps dropping out while it is still connected is usually a cable, port or enclosure fault before it is a failing drive.'
+        : 'These errors name a drive that is not attached any more, so they say nothing about the internal disk. Windows logs a burst like this when a USB drive is unplugged, or loses contact, while writes are still cached.',
+      evidence: [
+        ...named,
+        `${plural(externalCount, 'event')} between ${fmtTs(span.first)} and ${fmtTs(span.last)}`,
+        ...(dataLoss ? ['Windows could not save writes it had already cached, so data on that drive was lost'] : []),
+        ...tallyEvents(externalStorage, 4),
+      ],
+      actions: [
+        'Eject the drive ("Safely remove hardware") before unplugging it: pulling it mid-write loses whatever is still cached and can leave its file system inconsistent.',
+        'Next time it is connected, run "chkdsk D: /f" on that drive (with its own letter) to repair what the interrupted writes left behind.',
+        ...(attached
+          ? ['If it drops out while still plugged in, change the cable or port and retest before suspecting the drive itself.']
+          : []),
+      ],
+    });
+  }
+
   // ---- Network drivers ----
-  // A cable being unplugged is not a driver fault.
-  const netEvents = byCat('network').filter((e) => !/link (is|has been) disconnected|link is down/i.test(e.message));
+  // A cable being unplugged is not a driver fault, and Intel Wi-Fi drivers file routine
+  // "Driver Info" status at Warning level - thousands a month on a healthy machine, which
+  // otherwise reads as thousands of driver failures.
+  const NET_NOISE = /driver info|link (is|has been) disconnected|link is down/i;
+  const netAll = byCat('network');
+  const netNoise = netAll.filter((e) => NET_NOISE.test(e.message));
+  const netEvents = netAll.filter((e) => !NET_NOISE.test(e.message));
   const netReports = reportAreas('network');
+  const netNoiseCount = trueCount(netNoise, netAll);
+  // Windows creates virtual miniports for Wi-Fi Direct, Mobile hotspot and printing;
+  // those failing is not the physical adapter failing.
+  const netVirtualOnly =
+    netEvents.length > 0 && netEvents.every((e) => /virtual adapter|wi-fi direct|hosted network/i.test(e.message));
   if (netEvents.length || netReports.length) {
     const netDrivers = drivers.filter((d) => d.class === 'NET' && !/microsoft/i.test(d.provider));
-    for (const ep of episodes(netEvents.map((e) => e.ts))) {
-      timeline.push({ ts: ep.start, severity: 'info', label: 'Network adapter driver failure' });
+    // A virtual miniport failing a power transition is not a machine-stability event, and
+    // dozens of single-event bursts would crowd the crashes out of the timeline either way.
+    if (!netVirtualOnly) {
+      for (const ep of episodes(netEvents.map((e) => e.ts)).slice(-10)) {
+        timeline.push({ ts: ep.start, severity: 'info', label: 'Network adapter driver failure' });
+      }
     }
     findings.push({
       id: 'network',
-      severity: 'warning',
+      severity: netVirtualOnly ? 'info' : 'warning',
       area: 'Network',
-      title: 'Network adapter driver failed or was reset',
-      detail:
-        'The Wi-Fi/Ethernet driver reported internal errors or a stall. Besides dropped connections, a wedged network driver can block sleep, shutdown and anything waiting on the network.',
+      title: netVirtualOnly
+        ? `A virtual network adapter failed ${plural(trueCount(netEvents, netAll), 'time')}`
+        : 'Network adapter driver failed or was reset',
+      detail: netVirtualOnly
+        ? 'The failures are on a virtual miniport Windows creates for Wi-Fi Direct, Mobile hotspot and wireless printing, not on the physical adapter. They usually clear on the next power transition and rarely affect connectivity.'
+        : 'The Wi-Fi/Ethernet driver reported internal errors or a stall. Besides dropped connections, a wedged network driver can block sleep, shutdown and anything waiting on the network.',
       evidence: [
-        ...tally(netEvents.map((e) => `${e.source} ${e.id}: ${e.message}`), 3),
+        ...tallyEvents(netEvents, 3),
+        ...(netNoise.length
+          ? [`${plural(netNoiseCount, 'routine driver status message')} set aside as noise, not counted as failures`]
+          : []),
         ...netReports.map((r) => `${describeCode(codeNum(r.code))} live dump, first ${fmtTs(r.first)}, last ${fmtTs(r.last)}`),
         ...netDrivers.map((d) => `${d.device}: driver ${d.version}${d.ageDays != null ? ` (${d.ageDays} days old)` : ''}`),
       ],
@@ -725,6 +918,16 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
         'Install the latest Wi-Fi and Bluetooth driver package from the chip vendor (e.g. Intel Driver & Support Assistant) or the laptop maker.',
         'In Device Manager > network adapter > Power Management, untick "Allow the computer to turn off this device to save power" if failures cluster around sleep.',
       ],
+    });
+  } else if (netNoiseCount >= 50) {
+    findings.push({
+      id: 'network',
+      severity: 'ok',
+      area: 'Network',
+      title: 'No network driver failures',
+      detail: `The Wi-Fi driver filed ${plural(netNoiseCount, 'routine status message')} in this period. Windows records these at Warning level, but they report driver state rather than a fault.`,
+      evidence: tallyEvents(netNoise, 2),
+      actions: [],
     });
   }
 
@@ -772,6 +975,12 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
       severity = 'warning';
       title = 'The crash dumps from these blue screens are gone';
       evidence.push(`${plural(blueScreens.length, 'blue screen')} recorded, but no dump files remain in the Minidump folder`);
+    } else if (blueScreens.length && cfg.minidumpCount == null && !raw.elevated) {
+      severity = 'info';
+      title = 'Crash dump files could not be read';
+      evidence.push(
+        'Reading the Minidump folder needs administrator rights, so this run cannot say which dumps are still on disk'
+      );
     }
     if (dumpFailures.length) {
       severity = severity ?? 'info';
@@ -795,6 +1004,27 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
     }
   }
 
+  // ---- Crashes just outside the window ----
+  // "Blue screens: 0" while dumps sit on disk is a look-back artifact, not a clean bill of
+  // health, so say which crashes a longer window would pick up.
+  const olderDumps = arr(cfg.minidumps).filter((d) => d.ts > 0 && d.ts < cutoff);
+  if (isWindows && olderDumps.length && !blueScreens.length) {
+    const oldest = Math.min(...olderDumps.map((d) => d.ts));
+    const newest = Math.max(...olderDumps.map((d) => d.ts));
+    findings.push({
+      id: 'older-crashes',
+      severity: 'info',
+      area: 'Crash data',
+      title: `${plural(olderDumps.length, 'crash dump')} on disk from before this window`,
+      detail: `No blue screen was recorded in the last ${days} days, but Windows still holds dumps from earlier ones. They fall outside this look-back rather than showing the system never crashed.`,
+      evidence: [
+        ...olderDumps.slice(-6).map((d) => `${d.name}, written ${fmtTs(d.ts)}`),
+        `newest of them is ${Math.round((raw.collectedAt - newest) / 86_400)} days old`,
+      ],
+      actions: [`Re-run the check with a look-back that reaches past ${fmtDate(oldest)} to include them.`],
+    });
+  }
+
   // ---- Thermal throttling ----
   const thermal = byCat('thermal');
   if (thermal.length) {
@@ -802,9 +1032,9 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
       id: 'thermal',
       severity: 'warning',
       area: 'Thermal',
-      title: `CPU speed was limited by firmware ${plural(thermal.length, 'time')}`,
+      title: `CPU speed was limited by firmware ${plural(trueCount(thermal, thermal), 'time')}`,
       detail: 'The firmware throttled the processor, usually because of heat or a power limit. Sustained overheating also destabilizes GPUs and VRMs.',
-      evidence: tally(thermal.map((e) => e.message), 3),
+      evidence: tallyEvents(thermal, 3, false),
       actions: ['Clean the vents and fans, avoid soft surfaces, and use the performance mode that matches the workload.'],
     });
   }
@@ -867,9 +1097,9 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
       id: 'services',
       severity: 'info',
       area: 'Services',
-      title: `Services terminated unexpectedly (${plural(serviceCrashes.length, 'event')})`,
+      title: `Services terminated unexpectedly (${plural(trueCount(serviceCrashes, serviceCrashes), 'event')})`,
       detail: 'Background services that crash repeatedly can stall logon, shutdown or the apps that depend on them.',
-      evidence: tally(serviceCrashes.map((e) => e.message), 5),
+      evidence: tallyEvents(serviceCrashes, 5, false),
       actions: ['Update or uninstall the software that owns the failing service.'],
     });
   }
@@ -921,7 +1151,11 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
   timeline.sort((a, b) => b.ts - a.ts);
 
   const verdict: Severity = findings.length ? findings[0].severity : 'ok';
-  const causes = findings.filter((f) => f.id !== 'crashes' && (f.severity === 'critical' || f.severity === 'warning') && f.id !== 'apps');
+  const causes = findings.filter(
+    (f) =>
+      !['crashes', 'apps', 'storage-removable'].includes(f.id) &&
+      (f.severity === 'critical' || f.severity === 'warning')
+  );
   let headline: string;
   if (crashes.length) {
     headline = `This system crashed or froze ${plural(crashes.length, 'time')} in ${days} days.`;
@@ -936,8 +1170,8 @@ export function analyze(raw: RawDiagnostics): StabilityReport {
     { label: 'Unexpected shutdowns', value: crashes.length, severity: crashes.length ? 'critical' : 'ok' },
     { label: 'Freezes / power losses', value: freezes.length, severity: freezes.length ? 'critical' : 'ok' },
     { label: 'Blue screens', value: blueScreens.length, severity: blueScreens.length ? 'critical' : 'ok' },
-    { label: 'GPU driver resets', value: gpuEpisodes.length, severity: gpuEpisodes.length ? 'warning' : 'ok' },
-    { label: 'Out of memory', value: memEvents.length, severity: memEvents.length ? 'warning' : 'ok' },
+    { label: 'GPU driver resets', value: gpuResetCount, severity: gpuResetCount ? 'warning' : 'ok' },
+    { label: 'Out of memory', value: memCount, severity: memCount ? 'warning' : 'ok' },
     { label: 'App crashes / hangs', value: faults.reduce((n, f) => n + f.count, 0), severity: faults.length ? 'info' : 'ok' },
   ];
 
