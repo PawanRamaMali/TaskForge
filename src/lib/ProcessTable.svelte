@@ -1,6 +1,6 @@
 <script lang="ts">
   import { store } from './store.svelte';
-  import { fmtBytes, fmtBps, fmtPct } from './format';
+  import { fmtBytes, fmtBps, fmtPct, fmtDuration } from './format';
   import {
     CATEGORY_LABELS,
     CATEGORY_ORDER,
@@ -8,6 +8,7 @@
     PRIORITY_LABELS,
     type Category,
     type PriorityLevel,
+    type ProcessDetails,
     type ProcInfo,
   } from './types';
 
@@ -24,7 +25,9 @@
   let menuPid = $state<number | null>(null);
   let menuPos = $state<{ x: number; y: number } | null>(null);
   let frozen = $state<ProcInfo[] | null>(null);
-  let confirm = $state<{ pid: number; name: string; action: string; label: string } | null>(null);
+  let confirm = $state<{ proc: ProcInfo; action: string; label: string } | null>(null);
+  // Command line / working directory, fetched on demand when the confirm dialog opens.
+  let confirmDetails = $state<ProcessDetails | null>(null);
 
   $effect(() => {
     const v = search;
@@ -211,16 +214,49 @@
 
   function doSimple(p: ProcInfo, action: string, needsConfirm: boolean, label: string) {
     closeMenu();
-    if (needsConfirm) confirm = { pid: p.pid, name: p.name, action, label };
-    else store.processAction(p.pid, action, p.name);
+    if (!needsConfirm) {
+      store.processAction(p.pid, action, p.name);
+      return;
+    }
+    confirm = { proc: p, action, label };
+    confirmDetails = null;
+    // Enrich with command line / working dir if the process is still selected.
+    store.getProcessDetails(p.pid).then((d) => {
+      if (confirm?.proc.pid === p.pid) confirmDetails = d;
+    });
   }
 
   function confirmYes() {
     if (!confirm) return;
     const c = confirm;
     confirm = null;
-    if (c.action === 'kill_tree') store.killTree(c.pid, c.name);
-    else store.processAction(c.pid, c.action, c.name);
+    confirmDetails = null;
+    if (c.action === 'kill_tree') store.killTree(c.proc.pid, c.proc.name);
+    else store.processAction(c.proc.pid, c.action, c.proc.name);
+  }
+
+  // How many descendants a kill-tree would also end, from the current snapshot.
+  function descendantCount(pid: number): number {
+    const procs = store.snapshot?.processes ?? [];
+    const kids = new Map<number, number[]>();
+    for (const p of procs) {
+      if (p.parentPid != null && p.parentPid !== p.pid) {
+        (kids.get(p.parentPid) ?? kids.set(p.parentPid, []).get(p.parentPid)!).push(p.pid);
+      }
+    }
+    const seen = new Set([pid]);
+    const stack = [pid];
+    let count = 0;
+    while (stack.length) {
+      for (const k of kids.get(stack.pop()!) ?? []) {
+        if (!seen.has(k)) {
+          seen.add(k);
+          count++;
+          stack.push(k);
+        }
+      }
+    }
+    return count;
   }
 
   function rowClick(p: ProcInfo) {
@@ -340,14 +376,34 @@
 {/snippet}
 
 {#if confirm}
+  {@const p = confirm.proc}
+  {@const children = confirm.action === 'kill_tree' ? descendantCount(p.pid) : 0}
   <div class="overlay" onclick={() => (confirm = null)} role="presentation">
     <div class="dialog" onclick={(e) => e.stopPropagation()} role="alertdialog" tabindex="-1" onkeydown={() => {}}>
       <h3>{confirm.label}?</h3>
       <p>
-        {confirm.label} <strong>{confirm.name}</strong> (PID {confirm.pid})?
-        {#if confirm.action === 'kill_tree'}This ends the process and all of its child processes. Unsaved data will be lost.{:else if confirm.action.includes('kill')}Unsaved data in this process will be lost.{/if}
+        {confirm.label} <strong>{p.name}</strong> (PID {p.pid})?
+        {#if confirm.action === 'kill_tree'}This ends the process{#if children} and its {children} child process{children === 1 ? '' : 'es'}{/if}. Unsaved data will be lost.{:else if confirm.action.includes('kill')}Unsaved data in this process will be lost.{/if}
         {#if confirm.action === 'suspend'}The process will freeze until you resume it.{/if}
       </p>
+      <dl class="proc-info">
+        <dt>Path</dt>
+        <dd class="mono">{p.exe ?? confirmDetails?.cmd?.[0] ?? 'unknown'}</dd>
+        <dt>User</dt>
+        <dd>{p.user ?? '-'} · {CATEGORY_LABELS[p.category]}</dd>
+        <dt>Using</dt>
+        <dd>
+          {fmtPct(p.cpu)} CPU · {fmtBytes(p.memBytes)} RAM{#if p.gpuUtil != null} · {fmtPct(p.gpuUtil, 0)} GPU{/if}{#if p.runTime > 0} · up {fmtDuration(p.runTime)}{/if}
+        </dd>
+        {#if confirmDetails?.cwd}
+          <dt>Folder</dt>
+          <dd class="mono">{confirmDetails.cwd}</dd>
+        {/if}
+        {#if confirmDetails?.cmd?.length}
+          <dt>Command</dt>
+          <dd class="mono cmd">{confirmDetails.cmd.join(' ')}</dd>
+        {/if}
+      </dl>
       <div class="dialog-buttons">
         <button class="btn" onclick={() => (confirm = null)}>Cancel</button>
         <button class="btn danger" onclick={confirmYes}>{confirm.label}</button>
@@ -434,6 +490,15 @@
   .overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55); display: flex; align-items: center; justify-content: center; z-index: 100; }
   .dialog { background: var(--bg-menu); border: 1px solid var(--border); border-radius: 12px; padding: 1.2rem 1.4rem; max-width: 440px; width: 90%; }
   .dialog h3 { margin: 0 0 0.6rem; font-size: 1rem; }
-  .dialog p { margin: 0 0 1rem; font-size: 0.85rem; color: var(--fg-dim); line-height: 1.45; }
+  .dialog p { margin: 0 0 0.8rem; font-size: 0.85rem; color: var(--fg-dim); line-height: 1.45; }
   .dialog-buttons { display: flex; justify-content: flex-end; gap: 0.6rem; }
+  .proc-info {
+    display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 0.7rem;
+    margin: 0 0 1rem; padding: 0.6rem 0.7rem; background: var(--bg-raised);
+    border: 1px solid var(--border-faint); border-radius: 8px; font-size: 0.76rem;
+  }
+  .proc-info dt { color: var(--fg-faint); }
+  .proc-info dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere; }
+  .proc-info .mono { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: 0.72rem; color: var(--fg-dim); }
+  .proc-info .cmd { max-height: 3.4rem; overflow-y: auto; }
 </style>
