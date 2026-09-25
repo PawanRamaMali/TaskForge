@@ -7,6 +7,7 @@ mod optimize;
 mod rules;
 mod sampler;
 pub mod settings;
+mod startup;
 mod ui;
 
 use std::sync::Arc;
@@ -293,6 +294,23 @@ async fn apply_settings(
         .map_err(|e| format!("settings task failed: {e}"))
 }
 
+/// List apps, scripts and scheduled tasks that run at sign-in. No admin needed.
+#[tauri::command]
+async fn list_startup() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(startup::list)
+        .await
+        .map_err(|e| format!("startup task failed: {e}"))?
+}
+
+/// Enable or disable startup entries. Asks for admin once if any machine-scope
+/// entry is involved, which blocks, so it runs off the main thread.
+#[tauri::command]
+async fn apply_startup(changes: serde_json::Value) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || startup::apply(changes))
+        .await
+        .map_err(|e| format!("startup task failed: {e}"))?
+}
+
 /// Switch between the full window and the compact always-on-top mini view.
 /// Async because creating a window from a sync command can deadlock on Windows.
 #[tauri::command]
@@ -343,6 +361,8 @@ pub fn run() {
             save_diagnostics_report,
             list_settings,
             apply_settings,
+            list_startup,
+            apply_startup,
             set_mini_mode
         ])
         .run(tauri::generate_context!())
