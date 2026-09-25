@@ -7,7 +7,7 @@
 # on other processes may still require classic confinement (store-reviewed).
 name: taskforge
 base: core22
-version: '0.2.1'
+version: '0.2.2'
 summary: Process and resource manager with a live dashboard
 description: |
   TaskForge is a cross-platform task manager with a live resource dashboard
