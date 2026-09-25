@@ -22,6 +22,7 @@
   let viewMode = $state<'grouped' | 'flat' | 'tree'>('grouped');
   let collapsed = $state<Set<Category>>(new Set(['Critical']));
   let menuPid = $state<number | null>(null);
+  let menuPos = $state<{ x: number; y: number } | null>(null);
   let frozen = $state<ProcInfo[] | null>(null);
   let confirm = $state<{ pid: number; name: string; action: string; label: string } | null>(null);
 
@@ -125,18 +126,27 @@
     collapsed = next;
   }
 
+  // Opened from the ⋮ button or a right-click on the row; positioned at the cursor.
   function openMenu(pid: number, e: MouseEvent) {
+    e.preventDefault();
     e.stopPropagation();
-    if (menuPid === pid) {
+    if (menuPid === pid && e.type !== 'contextmenu') {
       closeMenu();
       return;
     }
+    // Approximate menu size, clamped so it stays fully on screen.
+    const w = 190;
+    const h = 320;
+    const x = Math.max(8, Math.min(e.clientX, window.innerWidth - w - 8));
+    const y = Math.max(8, Math.min(e.clientY, window.innerHeight - h - 8));
+    menuPos = { x, y };
     frozen = liveRows; // freeze sorting while the menu is open
     menuPid = pid;
   }
 
   function closeMenu() {
     menuPid = null;
+    menuPos = null;
     frozen = null;
   }
 
@@ -268,7 +278,13 @@
 </div>
 
 {#snippet row(p: ProcInfo, depth: number)}
-  <tr class:suspended={p.suspended} class:selected={p.pid === selectedPid} onclick={() => rowClick(p)}>
+  <tr
+    class:suspended={p.suspended}
+    class:selected={p.pid === selectedPid}
+    onclick={() => rowClick(p)}
+    oncontextmenu={(e) => openMenu(p.pid, e)}
+    title="Right-click for actions"
+  >
     <td class="name" title={p.exe ?? p.name}>
       <span style="padding-left: {depth * 14}px"></span>
       {#if p.category === 'Critical'}<span class="lock" title="Critical system process - protected">🔒</span>{/if}
@@ -290,7 +306,14 @@
       {#if menuPid === p.pid}
         {@const why = protectedReason(p)}
         {@const critical = p.category === 'Critical'}
-        <div class="menu" onclick={(e) => e.stopPropagation()} role="menu" tabindex="-1" onkeydown={() => {}}>
+        <div
+          class="menu"
+          style="left: {menuPos?.x ?? 0}px; top: {menuPos?.y ?? 0}px"
+          onclick={(e) => e.stopPropagation()}
+          role="menu"
+          tabindex="-1"
+          onkeydown={() => {}}
+        >
           <div class="menu-section">Priority</div>
           <div class="prio-row">
             {#each PRIORITY_LEVELS as lvl}
@@ -388,8 +411,8 @@
   tr:hover .kebab { visibility: visible; }
   .kebab:hover { background: var(--bg-hover); color: var(--fg); }
   .menu {
-    position: absolute; right: 1.8rem; top: 0; background: var(--bg-menu); border: 1px solid var(--border);
-    border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); z-index: 10; min-width: 170px;
+    position: fixed; background: var(--bg-menu); border: 1px solid var(--border);
+    border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); z-index: 50; min-width: 170px;
     padding: 0.25rem; display: flex; flex-direction: column;
   }
   .menu-section { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--fg-faint); padding: 0.3rem 0.5rem 0.15rem; }
