@@ -1,6 +1,6 @@
 [package]
 name = "task-manager"
-version = "0.2.0"
+version = "0.2.1"
 description = "TaskForge - cross-platform task manager"
 authors = ["alpine"]
 edition = "2021"
