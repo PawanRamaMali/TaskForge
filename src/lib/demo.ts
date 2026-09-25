@@ -304,12 +304,12 @@ function demoSettings(): SettingState[] {
 }
 
 const STARTUP = [
-  { id: 'ru|Steam', name: 'Steam', command: '"C:\\Program Files (x86)\\Steam\\steam.exe" -silent', source: 'Run (user)', scope: 'user', kind: 'ru', microsoft: false, enabled: true },
-  { id: 'sfu|Ollama.lnk', name: 'Ollama', command: 'C:\\Users\\alex\\AppData\\Local\\Programs\\Ollama\\ollama app.exe', source: 'Startup folder (user)', scope: 'user', kind: 'sfu', microsoft: false, enabled: true },
-  { id: 'ru|Discord', name: 'Discord', command: 'C:\\Users\\alex\\AppData\\Local\\Discord\\Update.exe --processStart Discord.exe', source: 'Run (user)', scope: 'user', kind: 'ru', microsoft: false, enabled: true },
-  { id: 'sfm|AnyDesk.lnk', name: 'AnyDesk', command: 'C:\\Program Files (x86)\\AnyDesk\\AnyDesk.exe', source: 'Startup folder (machine)', scope: 'machine', kind: 'sfm', microsoft: false, enabled: true },
-  { id: 'rm|SecurityHealth', name: 'SecurityHealth', command: 'C:\\WINDOWS\\system32\\SecurityHealthSystray.exe', source: 'Run (machine)', scope: 'machine', kind: 'rm', microsoft: true, enabled: true },
-  { id: 'st|\\OneDrive Startup Task', name: 'OneDrive Startup Task', command: 'C:\\Program Files\\Microsoft OneDrive\\OneDriveLauncher.exe', source: 'Scheduled task', scope: 'machine', kind: 'st', microsoft: true, enabled: true },
+  { id: 'ru|Steam', name: 'Steam', command: '"C:\\Program Files (x86)\\Steam\\steam.exe" -silent', source: 'Run (user)', scope: 'user', kind: 'ru', essential: false, enabled: true },
+  { id: 'sfu|Ollama.lnk', name: 'Ollama', command: 'C:\\Users\\alex\\AppData\\Local\\Programs\\Ollama\\ollama app.exe', source: 'Startup folder (user)', scope: 'user', kind: 'sfu', essential: false, enabled: true },
+  { id: 'ru|Discord', name: 'Discord', command: 'C:\\Users\\alex\\AppData\\Local\\Discord\\Update.exe --processStart Discord.exe', source: 'Run (user)', scope: 'user', kind: 'ru', essential: false, enabled: true },
+  { id: 'sfm|AnyDesk.lnk', name: 'AnyDesk', command: 'C:\\Program Files (x86)\\AnyDesk\\AnyDesk.exe', source: 'Startup folder (machine)', scope: 'machine', kind: 'sfm', essential: false, enabled: true },
+  { id: 'rm|SecurityHealth', name: 'SecurityHealth', command: 'C:\\WINDOWS\\system32\\SecurityHealthSystray.exe', source: 'Run (machine)', scope: 'machine', kind: 'rm', essential: true, enabled: true },
+  { id: 'st|\\OneDrive Startup Task', name: 'OneDrive Startup Task', command: 'C:\\Program Files\\Microsoft OneDrive\\OneDriveLauncher.exe', source: 'Scheduled task', scope: 'machine', kind: 'st', essential: true, enabled: true },
 ];
 
 const PLAN: PlannedAction[] = [

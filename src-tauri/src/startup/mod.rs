@@ -20,3 +20,14 @@ pub fn list() -> Result<serde_json::Value, String> {
 pub fn apply(changes: serde_json::Value) -> Result<serde_json::Value, String> {
     imp::apply(changes)
 }
+
+/// When started as `task-manager --apply-startup <b64> <out>`, apply the machine-
+/// scope changes elevated and return the process exit code; otherwise None.
+#[cfg(windows)]
+pub fn run_helper_from_args() -> Option<i32> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) != Some(imp::HELPER_FLAG) {
+        return None;
+    }
+    Some(imp::run_helper(&args[1..]))
+}

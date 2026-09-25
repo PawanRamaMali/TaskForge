@@ -23,7 +23,7 @@
   });
 
   const enabledCount = $derived(items.filter((i) => i.enabled).length);
-  const nonEssentialOn = $derived(items.filter((i) => i.enabled && !i.microsoft));
+  const nonEssentialOn = $derived(items.filter((i) => i.enabled && !i.essential));
 
   async function apply(changes: { id: string; enabled: boolean }[]) {
     if (!changes.length) return;
@@ -57,7 +57,7 @@
             <div class="info">
               <div class="label">
                 {i.name}
-                {#if i.microsoft}<span class="badge">Microsoft</span>{/if}
+                {#if i.essential}<span class="badge">system</span>{/if}
                 {#if i.scope === 'machine'}<span class="badge">admin</span>{/if}
                 <span class="src">{i.source}</span>
               </div>

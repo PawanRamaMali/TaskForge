@@ -6,5 +6,9 @@ fn main() {
     if let Some(code) = task_manager_lib::settings::run_helper_from_args() {
         std::process::exit(code);
     }
+    #[cfg(windows)]
+    if let Some(code) = task_manager_lib::startup::run_helper_from_args() {
+        std::process::exit(code);
+    }
     task_manager_lib::run()
 }

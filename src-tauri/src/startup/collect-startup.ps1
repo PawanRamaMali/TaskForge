@@ -1,4 +1,4 @@
-param([switch]$Apply, [string]$ChangesFile, [string]$OutFile)
+param([switch]$Apply, [string]$ChangesB64, [string]$OutFile)
 # Startup manager collector/applier (Windows).
 #   default: enumerate startup entries and emit one JSON document on stdout.
 #   -Apply -ChangesFile <path>: apply enable/disable changes from that JSON file,
@@ -50,7 +50,7 @@ foreach ($s in $RUN_SPECS) {
     [void]$items.Add([pscustomobject]@{
       id = New-Id $s.kind $name; name = $name; command = "$cmd"
       source = "Run ($($s.scope))"; scope = $s.scope; kind = $s.kind
-      microsoft = [bool](Is-Microsoft "$cmd"); enabled = [bool](Approved-Enabled $s.approved $name)
+      essential = [bool](Is-Microsoft "$cmd"); enabled = [bool](Approved-Enabled $s.approved $name)
     })
   }
 }
@@ -61,7 +61,7 @@ foreach ($s in $FOLDER_SPECS) {
     [void]$items.Add([pscustomobject]@{
       id = New-Id $s.kind $_.Name; name = $_.BaseName; command = "$target"
       source = "Startup folder ($($s.scope))"; scope = $s.scope; kind = $s.kind
-      microsoft = [bool](Is-Microsoft "$target"); enabled = [bool](Approved-Enabled $s.approved $_.Name)
+      essential = [bool](Is-Microsoft "$target"); enabled = [bool](Approved-Enabled $s.approved $_.Name)
     })
   }
 }
@@ -77,7 +77,7 @@ foreach ($t in (Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
   [void]$items.Add([pscustomobject]@{
     id = New-Id 'st' $full; name = $t.TaskName; command = "$action"
     source = 'Scheduled task'; scope = 'machine'; kind = 'st'
-    microsoft = [bool](Is-Microsoft "$action"); enabled = ($t.State -ne 'Disabled')
+    essential = [bool](Is-Microsoft "$action"); enabled = ($t.State -ne 'Disabled')
   })
 }
 
@@ -87,7 +87,9 @@ if (-not $Apply) {
 }
 
 # ---- Apply mode -----------------------------------------------------------
-$changes = Get-Content -Raw -Path $ChangesFile | ConvertFrom-Json
+# Changes arrive base64-encoded on the command line (data only), never as a
+# user-writable script file the elevated pass could read.
+$changes = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($ChangesB64)) | ConvertFrom-Json
 $results = New-Object System.Collections.ArrayList
 foreach ($c in $changes) {
   $item = $items | Where-Object { $_.id -eq $c.id } | Select-Object -First 1

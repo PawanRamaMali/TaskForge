@@ -7,7 +7,7 @@ mod optimize;
 mod rules;
 mod sampler;
 pub mod settings;
-mod startup;
+pub mod startup;
 mod ui;
 
 use std::sync::Arc;

@@ -28,14 +28,18 @@ pub fn list() -> Result<Value, String> {
             };
             let hidden = field("Hidden").as_deref() == Some("true");
             let disabled_by_show = field("X-GNOME-Autostart-enabled").as_deref() == Some("false");
+            // System-provided (/etc/xdg/autostart) and known desktop components are
+            // essential: "disable non-essential" must not turn off the keyring,
+            // polkit/authentication agents, accessibility or the panel/session.
+            let exec = field("Exec").unwrap_or_default();
             items.push(json!({
                 "id": format!("xdg|{name}"),
                 "name": field("Name").unwrap_or_else(|| name.trim_end_matches(".desktop").to_string()),
-                "command": field("Exec").unwrap_or_default(),
+                "command": exec,
                 "source": if user_scope { "Autostart (user)" } else { "Autostart (system)" },
                 "scope": if user_scope { "user" } else { "machine" },
                 "kind": "xdg",
-                "microsoft": false,
+                "essential": !user_scope || is_desktop_component(&name),
                 "enabled": !hidden && !disabled_by_show,
             }));
         }
@@ -82,6 +86,20 @@ fn set_enabled(id: &str, enabled: bool) -> Result<(), String> {
     lines.push(format!("Hidden={}", if enabled { "false" } else { "true" }));
     std::fs::create_dir_all(&user_dir).map_err(|e| e.to_string())?;
     std::fs::write(&user_path, lines.join("\n") + "\n").map_err(|e| e.to_string())
+}
+
+/// Desktop-session pieces that must survive "disable non-essential", matched by
+/// the .desktop file name (which is stable across distros).
+fn is_desktop_component(file: &str) -> bool {
+    const KEYS: &[&str] = &[
+        "keyring", "polkit", "pkttyagent", "at-spi", "a11y", "accessibility", "ibus",
+        "fcitx", "xdg-user-dirs", "gnome-", "org.gnome.", "kde", "plasma", "org.kde.",
+        "xfce", "xfce4-", "cinnamon", "mate-", "budgie", "session", "wayland", "xembed",
+        "tracker", "gsd-", "gvfs", "flatpak", "portal", "power-manager", "screensaver",
+        "notification", "network", "nm-applet", "blueman", "pulseaudio", "pipewire",
+    ];
+    let f = file.to_ascii_lowercase();
+    KEYS.iter().any(|k| f.contains(k))
 }
 
 fn user_autostart_dir() -> Option<PathBuf> {

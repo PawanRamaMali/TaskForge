@@ -7,8 +7,8 @@ export interface StartupItem {
   source: string;
   scope: 'user' | 'machine';
   kind: string;
-  /** Microsoft-signed / OS component — kept by "disable non-essential". */
-  microsoft: boolean;
+  /** OS / desktop component (Microsoft-signed on Windows) — kept by "disable non-essential". */
+  essential: boolean;
   enabled: boolean;
 }
 
