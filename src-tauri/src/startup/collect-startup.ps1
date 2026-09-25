@@ -98,9 +98,14 @@ foreach ($c in $changes) {
     if (-not $item) { throw 'not found' }
     $enable = [bool]$c.enabled
     if ($item.kind -eq 'st') {
-      $p, $n = ($item.id.Substring(3) -replace '\\([^\\]*)$', "`0`$1") -split "`0", 2
-      if ($enable) { Enable-ScheduledTask -TaskPath $p -TaskName $n -ErrorAction Stop | Out-Null }
-      else { Disable-ScheduledTask -TaskPath $p -TaskName $n -ErrorAction Stop | Out-Null }
+      # id is "st|<TaskPath><TaskName>"; split at the last backslash so the path
+      # keeps its trailing backslash (a root task's path is just "\").
+      $full = $item.id -replace '^st\|', ''
+      $cut = $full.LastIndexOf('\')
+      $taskPath = $full.Substring(0, $cut + 1)
+      $taskName = $full.Substring($cut + 1)
+      if ($enable) { Enable-ScheduledTask -TaskPath $taskPath -TaskName $taskName -ErrorAction Stop | Out-Null }
+      else { Disable-ScheduledTask -TaskPath $taskPath -TaskName $taskName -ErrorAction Stop | Out-Null }
     } else {
       $spec = ($RUN_SPECS + $FOLDER_SPECS) | Where-Object { $_.kind -eq $item.kind } | Select-Object -First 1
       if (-not (Test-Path $spec.approved)) { New-Item -Path $spec.approved -Force | Out-Null }
