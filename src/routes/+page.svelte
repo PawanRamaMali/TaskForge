@@ -5,6 +5,7 @@
   import OptimizeDialog from '$lib/OptimizeDialog.svelte';
   import StabilityDialog from '$lib/StabilityDialog.svelte';
   import SettingsDialog from '$lib/SettingsDialog.svelte';
+  import StartupDialog from '$lib/StartupDialog.svelte';
   import MiniView from '$lib/MiniView.svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
 
@@ -20,6 +21,7 @@
   let showOptimize = $state(demoOpen === 'optimize');
   let showStability = $state(demoOpen === 'stability');
   let showSettings = $state(demoOpen === 'settings');
+  let showStartup = $state(demoOpen === 'startup');
   let showCores = $state(false);
   let selectedPid = $state<number | null>(null);
 
@@ -80,6 +82,9 @@
       </button>
       <button class="btn" onclick={() => (showSettings = true)} title="Crash capture, Fast Startup, update restarts and autostart">
         Settings
+      </button>
+      <button class="btn" onclick={() => (showStartup = true)} title="Disable apps and scripts that run at sign-in">
+        Startup
       </button>
       <button class="btn" onclick={() => store.setMiniMode(true)} title="Small always-on-top window with the key graphs">
         Mini view
@@ -164,6 +169,9 @@
 {/if}
 {#if showSettings}
   <SettingsDialog onclose={() => (showSettings = false)} />
+{/if}
+{#if showStartup}
+  <StartupDialog onclose={() => (showStartup = false)} />
 {/if}
 {/if}
 <Toasts />

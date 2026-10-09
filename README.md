@@ -44,6 +44,8 @@ Screenshots use made-up demo data.
 
   Current values are read without admin rights. Changes that need them ask once (UAC on Windows, pkexec on Linux) and run through TaskForge itself in a helper mode that only accepts entries from a built-in list. Your original values are saved in the app config folder and each setting can be restored. The Linux system settings aren't available in the Snap build.
 
+- **Startup apps** - see everything that launches at sign-in (Run keys, Startup folders and logon scheduled tasks; Linux: XDG autostart) with its command and publisher, and turn any of it on or off. "Disable non-essential" switches off everything that isn't a Microsoft/OS component in one click, for a clean minimal boot. Nothing is deleted - it uses the same reversible enable/disable flags Task Manager uses. Machine-wide entries ask for admin once.
+
 **Quality-of-life**
 
 - **Mini view** - a small always-on-top window (280×224) with CPU, memory, GPU, disk and network values and live graphs, plus the hottest temperature and the busiest process. Open it from the header or the tray, drag it by its top bar, and use ⤢ to go back to the full window. TaskForge reopens in the view you used last, and the mini view remembers where you put it.

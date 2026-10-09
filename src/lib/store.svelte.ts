@@ -10,6 +10,7 @@ import type {
 } from './types';
 import { analyze, toMarkdown, type RawDiagnostics, type StabilityReport } from './diagnostics';
 import type { ChangeResult, SettingChange, SettingState } from './settings';
+import type { StartupChangeResult, StartupItem } from './startup';
 
 const HISTORY = 60;
 
@@ -207,6 +208,26 @@ class AppStore {
     } catch (e) {
       this.toast('error', `mini view: ${e}`);
     }
+  }
+
+  async listStartup(): Promise<StartupItem[]> {
+    const res = await invoke<{ items: StartupItem[] }>('list_startup');
+    return res.items ?? [];
+  }
+
+  async applyStartup(changes: { id: string; enabled: boolean }[]): Promise<StartupChangeResult[]> {
+    let results: StartupChangeResult[];
+    try {
+      const res = await invoke<{ results: StartupChangeResult[] }>('apply_startup', { changes });
+      results = res.results ?? [];
+    } catch (e) {
+      this.toast('error', `startup: ${e}`);
+      return [];
+    }
+    const failed = results.filter((r) => !r.ok);
+    if (failed.length) this.toast('error', failed.map((r) => `${r.id}: ${r.error}`).join(' · '));
+    else if (results.length) this.toast('ok', `${results.length} startup item${results.length === 1 ? '' : 's'} updated`);
+    return results;
   }
 
   async loadSettings() {

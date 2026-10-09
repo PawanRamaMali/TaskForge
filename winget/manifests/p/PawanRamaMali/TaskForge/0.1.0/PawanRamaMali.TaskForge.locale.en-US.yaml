@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
+
+PackageIdentifier: PawanRamaMali.TaskForge
+PackageVersion: 0.1.0
+PackageLocale: en-US
+Publisher: Pawan Rama Mali
+PublisherUrl: https://github.com/PawanRamaMali
+PublisherSupportUrl: https://github.com/PawanRamaMali/TaskForge/issues
+PackageName: TaskForge
+PackageUrl: https://github.com/PawanRamaMali/TaskForge
+License: MIT
+LicenseUrl: https://github.com/PawanRamaMali/TaskForge/blob/main/LICENSE
+ShortDescription: Task manager with a live system dashboard and process controls.
+Description: |-
+  See what is using your CPU, memory, disk, network and GPU, and manage processes: change priority, set CPU affinity, suspend, resume or end tasks.
+  Includes a stability check that shows why a PC crashes, freezes or hangs.
+Moniker: taskforge
+Tags:
+- task-manager
+- process-manager
+- system-monitor
+- performance
+ReleaseNotesUrl: https://github.com/PawanRamaMali/TaskForge/releases/tag/v0.1.0
+ManifestType: defaultLocale
+ManifestVersion: 1.10.0
