@@ -75,9 +75,13 @@ export interface DiskInfo {
 }
 
 export interface GpuInfo {
+  /** Stable per-adapter key, so each GPU keeps its own sparkline. */
+  id: string;
   available: boolean;
   reason: string | null;
   name: string | null;
+  /** True for a discrete card, false for integrated, null when unknown. */
+  discrete: boolean | null;
   utilization: number | null;
   memUsed: number | null;
   memTotal: number | null;
@@ -105,6 +109,16 @@ export interface ProcInfo {
   status: string;
 }
 
+/** One tick of sparkline history, served by the backend's `get_history`. */
+export interface HistorySample {
+  cpu: number;
+  memPct: number;
+  gpu: number;
+  gpus: Record<string, number>;
+  diskMbps: number;
+  netKbps: number;
+}
+
 export interface Snapshot {
   ts: number;
   cpu: CpuInfo;
@@ -112,7 +126,10 @@ export interface Snapshot {
   disks: DiskInfo[];
   net: NetInfo;
   temps: TempInfo[];
+  /** The busiest adapter; used where there is only room for one number. */
   gpu: GpuInfo;
+  /** Every adapter, in a stable order. */
+  gpus: GpuInfo[];
   processes: ProcInfo[];
   elevated: boolean;
 }

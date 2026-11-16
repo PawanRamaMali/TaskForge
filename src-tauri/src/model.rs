@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -47,9 +49,16 @@ pub struct DiskInfo {
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct GpuInfo {
+    /// Stable per-adapter key (LUID on Windows, card node on Linux). The UI
+    /// uses it to keep each GPU's sparkline attached to the same adapter
+    /// across ticks, so it must not change while the app runs.
+    pub id: String,
     pub available: bool,
     pub reason: Option<String>,
     pub name: Option<String>,
+    /// True for a discrete adapter, false for an integrated one, None when
+    /// the platform layer cannot tell.
+    pub discrete: Option<bool>,
     pub utilization: Option<u32>,
     pub mem_used: Option<u64>,
     pub mem_total: Option<u64>,
@@ -59,9 +68,11 @@ pub struct GpuInfo {
 impl GpuInfo {
     pub fn unavailable(reason: String) -> Self {
         GpuInfo {
+            id: "none".to_string(),
             available: false,
             reason: Some(reason),
             name: None,
+            discrete: None,
             utilization: None,
             mem_used: None,
             mem_total: None,
@@ -114,6 +125,25 @@ pub struct ProcInfo {
     pub status: String,
 }
 
+/// One tick of the values the dashboard sparklines plot.
+///
+/// The sampler keeps the last `HISTORY_LEN` of these so a window opened later -
+/// the mini view, or the main window restored from the tray - starts with a
+/// filled graph instead of 90 seconds of empty space. Each webview is its own
+/// JavaScript context, so in-page history cannot be shared between them.
+#[derive(Serialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HistorySample {
+    pub cpu: f64,
+    pub mem_pct: f64,
+    /// Busiest adapter, matching `Snapshot::gpu`.
+    pub gpu: u32,
+    /// Per-adapter utilization, keyed by `GpuInfo::id`.
+    pub gpus: HashMap<String, u32>,
+    pub disk_mbps: f64,
+    pub net_kbps: f64,
+}
+
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
@@ -123,7 +153,11 @@ pub struct Snapshot {
     pub disks: Vec<DiskInfo>,
     pub net: NetInfo,
     pub temps: Vec<TempInfo>,
+    /// The busiest adapter, kept for the mini view and the tray tooltip.
+    /// `gpus` keeps a stable order instead, so this is not always `gpus[0]`.
     pub gpu: GpuInfo,
+    /// Every adapter the platform can see, busiest first.
+    pub gpus: Vec<GpuInfo>,
     pub processes: Vec<ProcInfo>,
     pub elevated: bool,
 }

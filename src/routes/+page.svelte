@@ -14,6 +14,7 @@
   import DetailPanel from '$lib/DetailPanel.svelte';
   import Toasts from '$lib/Toasts.svelte';
   import { fmtBytes, fmtPct, fmtBps } from '$lib/format';
+  import type { GpuInfo } from '$lib/types';
 
   // Demo mode (dev only) can open a dialog straight away, for screenshots.
   const demoOpen = import.meta.env.DEV ? new URLSearchParams(location.search).get('open') : null;
@@ -30,6 +31,33 @@
   });
 
   const s = $derived(store.snapshot);
+
+  // Older snapshots carried a single `gpu`; fall back to it so the card still
+  // renders (including its "no GPU telemetry" state) when `gpus` is empty.
+  const gpuList = $derived<GpuInfo[]>(s ? (s.gpus?.length ? s.gpus : [s.gpu]) : []);
+
+  // With more than one adapter the cards need telling apart at a glance, and
+  // the full marketing name is far too long for the card title.
+  function gpuTitle(g: GpuInfo): string {
+    const name = g.name ?? '';
+    let vendor = 'GPU';
+    if (/nvidia|geforce|quadro|rtx|gtx/i.test(name)) vendor = 'NVIDIA';
+    else if (/intel|arc|iris|uhd/i.test(name)) vendor = 'Intel';
+    else if (/amd|radeon|ati/i.test(name)) vendor = 'AMD';
+    else if (/apple/i.test(name)) vendor = 'Apple';
+    return g.discrete === false ? `${vendor} iGPU` : `${vendor} GPU`;
+  }
+
+  // Live numbers first, adapter name last: the sub line is one ellipsised row,
+  // and an adapter name like "NVIDIA GeForce RTX 5070 Ti Laptop GPU" would
+  // otherwise push the VRAM and temperature off the end of the card.
+  function gpuSub(g: GpuInfo): string {
+    const parts: string[] = [];
+    if (g.memUsed != null) parts.push(`${fmtBytes(g.memUsed)} / ${fmtBytes(g.memTotal)}`);
+    if (g.temperatureC != null) parts.push(`${g.temperatureC}°C`);
+    if (g.name) parts.push(g.name);
+    return parts.join(' · ');
+  }
   const selectedProc = $derived(
     selectedPid != null ? (s?.processes.find((p) => p.pid === selectedPid) ?? null) : null
   );
@@ -110,15 +138,17 @@
         history={store.memHistory}
         color="#b78af5"
       />
-      <StatCard
-        title="GPU"
-        value={s.gpu.available ? fmtPct(s.gpu.utilization, 0) : '-'}
-        sub="{s.gpu.name ?? ''}{s.gpu.memUsed != null ? ` · ${fmtBytes(s.gpu.memUsed)} / ${fmtBytes(s.gpu.memTotal)}` : ''}{s.gpu.temperatureC != null ? ` · ${s.gpu.temperatureC}°C` : ''}"
-        history={store.gpuHistory}
-        color="#53c98b"
-        disabled={!s.gpu.available}
-        disabledReason={s.gpu.reason ?? 'No GPU telemetry available'}
-      />
+      {#each gpuList as g (g.id)}
+        <StatCard
+          title={gpuList.length > 1 ? gpuTitle(g) : 'GPU'}
+          value={g.available ? fmtPct(g.utilization, 0) : '-'}
+          sub={gpuSub(g)}
+          history={store.gpuHistories[g.id] ?? []}
+          color="#53c98b"
+          disabled={!g.available}
+          disabledReason={g.reason ?? 'No GPU telemetry available'}
+        />
+      {/each}
       <StatCard
         title="Disk"
         value="{diskMBps.toFixed(1)} MB/s"
@@ -249,7 +279,9 @@
   :global(.btn.primary:hover:not(:disabled)) { filter: brightness(1.1); }
   :global(.btn.danger) { background: var(--danger); border-color: var(--danger); color: #fff; font-weight: 600; }
   :global(.btn:disabled) { opacity: 0.5; cursor: not-allowed; }
-  .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.6rem; }
+  /* auto-fit keeps the usual five across and adds a column per extra GPU,
+     wrapping instead of squashing once the window gets too narrow. */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 0.6rem; }
   .cores { display: flex; gap: 4px; padding: 0.4rem 0.2rem; align-items: flex-end; height: 56px; }
   .core {
     flex: 1; max-width: 26px; height: 44px; background: var(--bg-raised); border: 1px solid var(--border);

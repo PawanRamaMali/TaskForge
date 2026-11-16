@@ -2,6 +2,7 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import type {
   ActionResult,
+  HistorySample,
   PlannedAction,
   PriorityLevel,
   PriorityRule,
@@ -40,7 +41,10 @@ class AppStore {
   snapshot = $state<Snapshot | null>(null);
   cpuHistory = $state<number[]>([]);
   memHistory = $state<number[]>([]);
+  /** Sparkline for the busiest adapter, used by the mini view. */
   gpuHistory = $state<number[]>([]);
+  /** One sparkline per adapter, keyed by GpuInfo.id. */
+  gpuHistories = $state<Record<string, number[]>>({});
   diskHistory = $state<number[]>([]); // aggregate MB/s across drives
   netHistory = $state<number[]>([]); // aggregate KB/s across interfaces
   toasts = $state<Toast[]>([]);
@@ -54,17 +58,57 @@ class AppStore {
     this.started = true;
     this.applyTheme();
     this.refreshRules();
+    // Seed before subscribing: the backend's buffer already contains the tick
+    // we would otherwise receive first, so seeding afterwards would duplicate
+    // it at the end of every graph.
+    await this.seedHistory();
     await listen<Snapshot>('snapshot', (event) => {
       const s = event.payload;
       this.snapshot = s;
       this.cpuHistory = pushHistory(this.cpuHistory, s.cpu.overall);
       this.memHistory = pushHistory(this.memHistory, (s.mem.used / s.mem.total) * 100);
       this.gpuHistory = pushHistory(this.gpuHistory, s.gpu.utilization ?? 0);
+      // Rebuild rather than mutate so a GPU that disappears (eGPU unplugged,
+      // driver reset) does not leave a stale sparkline behind.
+      const gpuHistories: Record<string, number[]> = {};
+      for (const g of s.gpus ?? []) {
+        gpuHistories[g.id] = pushHistory(this.gpuHistories[g.id] ?? [], g.utilization ?? 0);
+      }
+      this.gpuHistories = gpuHistories;
       const diskMBps = s.disks.reduce((acc, d) => acc + d.readBps + d.writeBps, 0) / (1024 * 1024);
       this.diskHistory = pushHistory(this.diskHistory, diskMBps);
       const netKBps = (s.net.rxBps + s.net.txBps) / 1024;
       this.netHistory = pushHistory(this.netHistory, netKBps);
     });
+  }
+
+  /** Fills the graphs from the sampler's ring buffer, so a window that opens
+   *  later - the mini view, or the main window reopened from the tray - starts
+   *  with history instead of 90 seconds of blank sparkline. */
+  private async seedHistory() {
+    let samples: HistorySample[] | null = null;
+    try {
+      samples = await invoke<HistorySample[]>('get_history');
+    } catch {
+      // No backend yet (or demo mode): just start with empty graphs.
+      return;
+    }
+    if (!samples?.length) return;
+
+    const tail = samples.slice(-HISTORY);
+    this.cpuHistory = tail.map((h) => h.cpu);
+    this.memHistory = tail.map((h) => h.memPct);
+    this.gpuHistory = tail.map((h) => h.gpu);
+    this.diskHistory = tail.map((h) => h.diskMbps);
+    this.netHistory = tail.map((h) => h.netKbps);
+
+    // An adapter may appear part-way through the buffer, so collect every id
+    // seen and read a missing tick as zero rather than dropping the series.
+    const ids = new Set<string>();
+    for (const h of tail) for (const id of Object.keys(h.gpus ?? {})) ids.add(id);
+    const gpuHistories: Record<string, number[]> = {};
+    for (const id of ids) gpuHistories[id] = tail.map((h) => h.gpus?.[id] ?? 0);
+    this.gpuHistories = gpuHistories;
   }
 
   applyTheme() {

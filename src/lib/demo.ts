@@ -83,6 +83,33 @@ function makeSnapshot(t: number): Snapshot {
     };
   });
 
+  // A discrete NVIDIA card plus an Intel iGPU: the usual laptop pairing, and
+  // the case that used to collapse into a single card.
+  const gpus = [
+    {
+      id: 'luid-00000000-00012b78',
+      available: true,
+      reason: null,
+      name: 'NVIDIA GeForce RTX 5070 Ti Laptop GPU',
+      discrete: true,
+      utilization: Math.round(30 + 35 * wave(t, 25)),
+      memUsed: 7.6 * GB,
+      memTotal: 12 * GB,
+      temperatureC: Math.round(52 + 14 * wave(t, 25)),
+    },
+    {
+      id: 'luid-00000000-00012f96',
+      available: true,
+      reason: null,
+      name: 'Intel(R) Graphics',
+      discrete: false,
+      utilization: Math.round(6 + 14 * wave(t, 17, 3)),
+      memUsed: 0.4 * GB,
+      memTotal: 2 * GB,
+      temperatureC: null,
+    },
+  ];
+
   return {
     ts: Date.now(),
     cpu: {
@@ -119,15 +146,8 @@ function makeSnapshot(t: number): Snapshot {
       totalTx: 2 * GB,
     },
     temps: [{ label: 'CPU Package', tempC: 56 + 12 * wave(t, 40), maxC: 100 }],
-    gpu: {
-      available: true,
-      reason: null,
-      name: 'NVIDIA GeForce RTX 5070 Ti Laptop GPU',
-      utilization: Math.round(30 + 35 * wave(t, 25)),
-      memUsed: 7.6 * GB,
-      memTotal: 12 * GB,
-      temperatureC: Math.round(52 + 14 * wave(t, 25)),
-    },
+    gpu: gpus[0],
+    gpus,
     processes,
     elevated: true,
   };

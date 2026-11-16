@@ -14,7 +14,8 @@ Screenshots use made-up demo data.
 
 **Monitoring**
 
-- **Live dashboard** - CPU (overall + per-core grid), RAM, per-drive disk activity, network throughput (↓/↑), CPU/system temperatures, and GPU utilization/VRAM/temperature (NVIDIA via NVML; gracefully hidden without it). Refreshed every 1.5 s with 90-second sparkline history.
+- **Live dashboard** - CPU (overall + per-core grid), RAM, per-drive disk activity, network throughput (↓/↑), CPU/system temperatures, and GPU utilization/VRAM/temperature. Refreshed every 1.5 s with 90-second sparkline history.
+- **Multiple GPUs** - every adapter gets its own card, so a laptop with a discrete NVIDIA card and an Intel or AMD iGPU shows both rather than whichever one the driver happens to list first. Integrated GPUs report their shared-memory pool, since they have no dedicated VRAM to speak of.
 - **Process list** - sortable and searchable, with per-process CPU %, memory, disk I/O, and GPU usage. View as **grouped** (by category), **flat**, or a **parent/child tree**.
 - **Process inspector** - click any row for a detail panel: full command line, working directory, parent, start time, uptime, status, current priority, CPU affinity, and environment-variable count.
 - **Smart grouping** - processes are classified as **Apps**, **Background**, **OS services**, or **Critical system**. Critical processes are locked: the backend refuses to kill or suspend them no matter what the UI asks.
@@ -48,7 +49,7 @@ Screenshots use made-up demo data.
 
 **Quality-of-life**
 
-- **Mini view** - a small always-on-top window (280×224) with CPU, memory, GPU, disk and network values and live graphs, plus the hottest temperature and the busiest process. Open it from the header or the tray, drag it by its top bar, and use ⤢ to go back to the full window. TaskForge reopens in the view you used last, and the mini view remembers where you put it.
+- **Mini view** - a small always-on-top window (280×224) with CPU, memory, GPU, disk and network values and live graphs, plus the hottest temperature and the busiest process. Open it from the header or the tray, drag it by its top bar, and use ⤢ to go back to the full window. TaskForge reopens in the view you used last, and the mini view remembers where you put it. Its graphs open already filled: the 90-second history is kept by the sampler, not by the window, so switching views or reopening from the tray never restarts them from blank.
 
 - System-tray icon with live CPU/RAM tooltip; click to restore the window.
 - One-click **Restart as administrator** (Windows `runas` / Linux `pkexec`).
@@ -131,6 +132,6 @@ Each OS builds its own installers - build on Windows for Windows, on Ubuntu for 
 - `src-tauri/src/classify.rs` - OS-specific classification rules and the safe-to-kill table
 - `src-tauri/src/actions/` - per-OS process actions (priority, efficiency, affinity, trim, suspend, kill, elevation) with backend-enforced safety guards
 - `src-tauri/src/rules.rs` - persistent per-executable priority rules (loaded from / saved to the app config dir)
-- `src-tauri/src/gpu.rs` - NVML wrapper with graceful degradation
+- `src-tauri/src/gpu/` - per-adapter GPU telemetry with graceful degradation. Windows enumerates every adapter via DXGI and reads the `GPU Engine` / `GPU Adapter Memory` performance counters; Linux reads `gpu_busy_percent` and VRAM counters from sysfs. NVML then layers temperature and per-process figures onto NVIDIA cards.
 - `src-tauri/src/optimize.rs` - two-phase Optimize All (plan → user preview → apply)
 - `src/lib/` - Svelte 5 frontend (stat cards, sparklines, process table with grouped/flat/tree views, detail panel, dialogs)

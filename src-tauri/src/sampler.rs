@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -18,9 +18,17 @@ const TICK: Duration = Duration::from_millis(1500);
 /// EMA smoothing factor for sustained-CPU detection used by Optimize All.
 const EMA_ALPHA: f32 = 0.4;
 
+/// Sparkline samples retained for windows that open later. Must match the
+/// frontend's `HISTORY`; at one tick per 1.5 s this is the same 90 seconds the
+/// graphs show.
+pub const HISTORY_LEN: usize = 60;
+
 #[derive(Default)]
 pub struct SharedState {
     pub latest: Mutex<Option<Snapshot>>,
+    /// Rolling sparkline history, oldest first. Lives here rather than in the
+    /// page so every window starts with the same filled graphs.
+    pub history: Mutex<VecDeque<HistorySample>>,
     pub suspended: Mutex<HashSet<u32>>,
     pub cpu_ema: Mutex<HashMap<u32, f32>>,
     pub rules: RuleStore,
@@ -77,7 +85,14 @@ fn run(app: AppHandle, state: Arc<SharedState>) {
         networks.refresh(true);
         components.refresh(true);
 
-        let (gpu_info, gpu_procs) = gpu.sample();
+        let (gpus, gpu_procs) = gpu.sample();
+        // The mini view and the tray tooltip have room for one number, so
+        // pick the adapter actually doing work rather than always the first.
+        let primary = gpus
+            .iter()
+            .max_by_key(|g| g.utilization.unwrap_or(0))
+            .cloned()
+            .unwrap_or_else(|| GpuInfo::unavailable("No GPU telemetry available".to_string()));
 
         let core_count = sys.cpus().len().max(1);
         let current_session_id = sys
@@ -245,7 +260,8 @@ fn run(app: AppHandle, state: Arc<SharedState>) {
             disks: disks_info,
             net,
             temps,
-            gpu: gpu_info,
+            gpu: primary,
+            gpus,
             processes,
             elevated,
         };
@@ -259,6 +275,8 @@ fn run(app: AppHandle, state: Arc<SharedState>) {
             )));
         }
 
+        record_history(&state, &snapshot);
+
         let _ = app.emit("snapshot", &snapshot);
         *state.latest.lock() = Some(snapshot);
 
@@ -267,4 +285,33 @@ fn run(app: AppHandle, state: Arc<SharedState>) {
             std::thread::sleep(TICK - elapsed);
         }
     }
+}
+
+/// Appends this tick to the rolling history, dropping the oldest sample once
+/// the buffer is full. The derived values are computed exactly as the
+/// dashboard computes them, so a seeded graph lines up with the live one.
+fn record_history(state: &SharedState, snapshot: &Snapshot) {
+    let sample = HistorySample {
+        cpu: snapshot.cpu.overall as f64,
+        mem_pct: snapshot.mem.used as f64 / snapshot.mem.total.max(1) as f64 * 100.0,
+        gpu: snapshot.gpu.utilization.unwrap_or(0),
+        gpus: snapshot
+            .gpus
+            .iter()
+            .map(|g| (g.id.clone(), g.utilization.unwrap_or(0)))
+            .collect(),
+        disk_mbps: snapshot
+            .disks
+            .iter()
+            .map(|d| d.read_bps + d.write_bps)
+            .sum::<u64>() as f64
+            / (1024.0 * 1024.0),
+        net_kbps: (snapshot.net.rx_bps + snapshot.net.tx_bps) as f64 / 1024.0,
+    };
+
+    let mut history = state.history.lock();
+    while history.len() >= HISTORY_LEN {
+        history.pop_front();
+    }
+    history.push_back(sample);
 }

@@ -15,7 +15,8 @@ use std::sync::Arc;
 use actions::ActionError;
 use classify::action_allowed;
 use model::{
-    ActionResult, OptimizeKind, PlannedAction, PriorityLevel, PriorityRule, ProcessDetails,
+    ActionResult, HistorySample, OptimizeKind, PlannedAction, PriorityLevel, PriorityRule,
+    ProcessDetails,
 };
 use sampler::SharedState;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
@@ -202,6 +203,14 @@ fn restart_as_admin() -> Result<(), ActionError> {
     actions::restart_as_admin()
 }
 
+/// Sparkline history for a window that just opened. Each webview has its own
+/// JavaScript context, so the mini view (and the main window reopened from the
+/// tray) would otherwise start with empty graphs.
+#[tauri::command]
+fn get_history(state: State<'_, Arc<SharedState>>) -> Vec<HistorySample> {
+    state.history.lock().iter().cloned().collect()
+}
+
 #[tauri::command]
 fn list_rules(state: State<'_, Arc<SharedState>>) -> Vec<PriorityRule> {
     state.rules.list()
@@ -363,7 +372,8 @@ pub fn run() {
             apply_settings,
             list_startup,
             apply_startup,
-            set_mini_mode
+            set_mini_mode,
+            get_history
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
